@@ -1,0 +1,5 @@
+.sites-local/
+node_modules/
+artifacts/
+*.zip
+chapter1-reference.txt
