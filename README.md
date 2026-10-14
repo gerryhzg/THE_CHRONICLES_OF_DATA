@@ -12,6 +12,8 @@ npm.cmd start
 
 Open **http://127.0.0.1:4173** in a modern browser. Keep the terminal open while playing; press Ctrl+C to stop the server. No dependencies or build step are needed. On PowerShell, `npm.cmd` avoids the execution-policy restriction that can affect `npm.ps1`.
 
+If this game is already running, `npm.cmd start` prints its existing URL. If another application uses the starting port, the server tries the next available port and prints the correct URL. Use that printed address. `PORT` can set a different starting port; browser saves belong to each exact address, so export/import when changing ports.
+
 ## Controls
 
 | Action | Control |
