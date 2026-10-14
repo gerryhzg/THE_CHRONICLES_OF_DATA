@@ -27,6 +27,8 @@ If this game is already running, `npm.cmd start` prints its existing URL. If ano
 
 Touch controls appear on small screens. Battles use buttons and pause movement. Dialog buttons support Tab and Enter; Escape returns from save or DataDex to an unfinished battle.
 
+Story conversations show one dialogue segment at a time alongside the speaker's name, role, and portrait. Click **Next**, or press **Enter**, **Space**, or **E** to advance. **Back** revisits the previous segment; Tab and Enter also operate the Back button. Holding a key does not skip lines or automatically select a newly revealed choice. Expressions change with the conversation, and gameplay options appear on its final segment. Escape closes the conversation; reopening starts from its first segment. Character portraits include Lyra, Kai, Inferra, Rowan, the ranger, the player, and the DataDex.
+
 ## Complete Stage 1 walkthrough
 
 1. Begin your journey and choose **Statifox**, **Algobear**, or **Terradeer**. If you choose to explore first, visit Lyra’s Lab to choose your companion. Every starter can complete the prototype.
@@ -66,6 +68,6 @@ node scripts/browser-smoke.mjs
 
 It writes screenshots and a verification report under `artifacts/`. This README describes the checks available; consult their actual output for results.
 
-The game is buildless HTML, CSS, and JavaScript. `dist/engine.js` contains serializable rules and save validation; `dist/world.js` contains maps and programmatically drawn pixel artwork; `dist/app.js` connects exploration, combat, investigation, and browser storage. `scripts/serve.mjs` serves the playable `dist/` folder.
+The game is buildless HTML, CSS, and JavaScript. `dist/engine.js` contains serializable rules and save validation; `dist/world.js` contains maps and programmatically drawn pixel artwork; `dist/app.js` connects exploration, combat, investigation, and browser storage. `dist/dialogue.js` stores segmented conversations and navigation, while `dist/portraits.js` renders character portraits and expressions as accessible inline SVG. `scripts/serve.mjs` serves the playable `dist/` folder.
 
 This is **Stage 1**, not the full Chapter One: later regions, the remaining quests and roster, evolutions, the Oracle finale, and a full chapter expansion framework remain future work. The pixel scenery and creature illustrations are original code-native prototype artwork.

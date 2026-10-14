@@ -1,5 +1,7 @@
 import { SPECIES, HABITATS, createGame, act, saveGame, loadGame, serializeGame, parseGame, SAVE_KEY } from './engine.js';
 import { MAPS, isWalkable, renderWorld, drawCreature } from './world.js';
+import { getConversation, createDialogue, currentSegment, advanceDialogue, previousDialogue, isDialogueComplete } from './dialogue.js';
+import { resolveSpeaker, portraitMarkup } from './portraits.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -21,6 +23,8 @@ try {
 } catch { savingAvailable = false; }
 let modal = null;
 let modalData = {};
+let activeDialogue = null;
+const heldDialogueKeys = new Set();
 let returnFocus = null;
 let path = [];
 let pathTarget = null;
@@ -40,6 +44,11 @@ const observations = () => quest().observations || [];
 const hasObserved = (habitatId, time) => observations().some(o => o.habitatId === habitatId && o.time === time);
 const dexEntry = (id) => state.dex.species[id] || {};
 const habitatName = (id) => habitats().find(h => h.id === id)?.title || id;
+const samplingHints=[
+  ['The ranger visits only the canopy, and only at night.','Which habitats and times are missing from his notebook?'],
+  ['Compare the same habitat in daylight and moonlight, then compare habitats.','Does one place at one time represent all of them?'],
+  ['A night-only sample favors the creatures visible at night.','It cannot establish that nearly every creature in the forest is nocturnal.']
+];
 
 function toast(message) {
   $('toast').textContent = message;
@@ -91,7 +100,8 @@ function dispatch(action, {quiet = false} = {}) {
       const won = before.battle.kind === 'rival' && (result.events || []).some(event => event.startsWith('Kai:'));
       const recruited = !before.flags.recruitedVoltkit && state.flags.recruitedVoltkit;
       modal = 'battle-result';
-      modalData = {won, recruited, events:result.events || []};
+      modalData = {won, recruited, events:result.events || [],kind:before.battle.kind};
+      activeDialogue = prepareDialogue(modal,modalData);
       chime(won || recruited ? 'success' : 'action');
     }
     if (modal) renderModal();
@@ -203,12 +213,12 @@ function interact(target = nearTarget()) {
   path=[]; pathTarget=null;
   if (target.id === 'lab') { openModal(state.starter ? 'lyra' : 'starters'); }
   else if (target.id === 'kai') {
-    if (!state.starter) { openDialogue('Kai','A friendly challenge','“Lyra has three companions waiting for you. Choose one, then we can have our first battle!”'); }
+    if (!state.starter) { openDialogue('Kai','A friendly challenge','', 'kai-before-starter'); }
     else if (state.flags.rivalDefeated) { openModal('rival'); }
     else openModal('rival');
   } else if (target.id === 'sanctuary') openModal('sanctuary');
   else if (target.id === 'gate') {
-    if (!state.flags.rivalDefeated) openDialogue('Village gate','Before the forest','Your first adventure lies beyond this road. Choose a companion and finish Kai’s friendly battle before venturing into the wilderness.');
+    if (!state.flags.rivalDefeated) openDialogue('Village gate','Before the forest','', 'gate-locked');
     else travel('forest');
   } else if (target.id === 'exit') travel('village');
   else if (target.id === 'home') openModal('save');
@@ -222,64 +232,131 @@ function interact(target = nearTarget()) {
   chime();
 }
 
-function openDialogue(title, subtitle, text) { openModal('dialogue',{title,subtitle,text}); }
+function openDialogue(title, subtitle, text, conversationId, options = {}) {
+  openModal('dialogue',{title,subtitle,text,conversationId,...options});
+}
 function openModal(type, data = {}) {
   if (!modal) returnFocus=document.activeElement;
   path=[]; pathTarget=null; modal=type; modalData=data;
-  renderModal(); updatePrompt();
+  activeDialogue=prepareDialogue(type,data);
+  renderModal({resetFocus:true}); updatePrompt();
 }
 function closeModal() {
   if (state.battle) {
     if (modal !== 'battle') { openModal('battle'); return; }
     toast('Finish this encounter, or flee from a wild battle.'); return;
   }
-  modal=null; modalData={}; $('modal-root').innerHTML=''; updatePrompt();
+  modal=null; modalData={}; activeDialogue=null; $('modal-root').innerHTML=''; $('dialogue-announcer').textContent=''; updatePrompt();
   if (returnFocus?.isConnected) returnFocus.focus({preventScroll:true}); else $('world').focus({preventScroll:true});
+}
+
+const conversationTypes = new Set(['starters','lyra','rival','sanctuary','tower','inferra','camp','wild','complete','battle-result','mastery']);
+
+function prepareDialogue(type, data = {}) {
+  const context={
+    playerName:state.player.name,starterName:creatureName(state.starter),
+    rivalDefeated:state.flags.rivalDefeated,questStatus:quest().status,
+    recruited:state.flags.recruitedVoltkit,time:state.time,...data
+  };
+  if (conversationTypes.has(type)) {
+    const conversation=getConversation(type,context);
+    if (type==='mastery' && conceptStatus('concept_sampling_bias')==='mastered') {
+      conversation.title='A thoughtful field researcher';
+      conversation.segments=[{speaker:'inferra',expression:'happy',text:'Your DataDex records your mastery: observe several habitats at different times, using a consistent method.'}];
+    }
+    return createDialogue(conversation);
+  }
+  if (type==='dialogue') {
+    if (data.conversationId) return createDialogue(getConversation(data.conversationId,context));
+    const lines=data.segments || [data.text];
+    return createDialogue({
+      id:'field-dialogue',title:data.title,subtitle:data.subtitle,
+      segments:lines.map(text=>({speaker:data.speaker || 'narrator',expression:data.expression || 'thoughtful',text})),
+      endLabel:'Continue exploring'
+    });
+  }
+  return null;
+}
+
+function dialogueMarkup() {
+  const segment=currentSegment(activeDialogue);
+  const speaker=resolveSpeaker(segment.speaker,state.player.name);
+  const expression=speaker.expressions.includes(segment.expression)?segment.expression:'neutral';
+  const {index,conversation}=activeDialogue;
+  const complete=isDialogueComplete(activeDialogue);
+  return `<section class="dialogue-box" data-speaker-id="${esc(speaker.id)}" data-expression="${esc(expression)}" aria-labelledby="dialogue-speaker" style="--speaker-accent:${esc(speaker.accent)}">
+    <div class="speaker-portrait">${portraitMarkup(speaker.id,expression,state.player.name)}</div>
+    <div class="dialogue-copy"><div class="speaker-heading"><h3 id="dialogue-speaker">${esc(speaker.name)}</h3><span>${esc(speaker.role)}</span></div><p id="dialogue-line">${esc(segment.text)}</p></div>
+    <div class="dialogue-controls"><div class="dialogue-position"><span>${index+1} <i>/</i> ${conversation.segments.length}</span><small>${complete?'Choose an option below':'Enter · Space · E to advance'}</small></div><div class="dialogue-buttons"><button class="secondary-button small-button" data-action="dialogue-back" aria-label="Previous dialogue segment" ${index===0?'disabled':''}>← Back</button><button class="primary-button small-button" data-action="dialogue-next" aria-label="Next dialogue segment" ${complete?'disabled':''}>${complete?'All read ✓':'Next →'}</button></div></div>
+  </section>`;
+}
+
+function conversationActions() {
+  if (!isDialogueComplete(activeDialogue)) return '';
+  const close='<button class="secondary-button" data-action="close">Continue exploring</button>';
+  if (modal==='starters') {
+    const descriptions={creature_statifox:'Recognizes patterns. Agile and observant.',creature_algobear:'Plans efficient attacks. Sturdy and precise.',creature_terradeer:'Understands the environment. Balanced and restorative.'};
+    const roles={creature_statifox:'Mathematics & statistics',creature_algobear:'Computer science',creature_terradeer:'Domain knowledge'};
+    return `<div class="dialogue-followup"><h3>Who will join your journey?</h3><div class="starter-grid">${Object.keys(descriptions).map(id=>`<button class="starter-card" data-action="choose" data-id="${id}">${portrait(id,140)}<h3>${esc(creatureName(id))}</h3><span class="type">${roles[id]}</span><p>${descriptions[id]}</p><div class="starter-stats"><span>Lv. 5</span><span>${esc(SPECIES[id].role)}</span></div><span class="choose">Choose ${esc(creatureName(id))} ↗</span></button>`).join('')}</div></div>`;
+  }
+  if (modal==='lyra') return `<div class="modal-actions"><button class="primary-button" data-action="dex">Open DataDex</button>${close}</div>`;
+  if (modal==='rival') return `<div class="dialogue-followup"><div class="evidence-note">Potions restore HP. After recruiting another companion, switching takes a turn.</div><div class="modal-actions"><button class="primary-button" data-action="start-battle" data-kind="rival">Challenge Kai ⚔</button>${close}</div></div>`;
+  if (modal==='sanctuary') return `<div class="dialogue-followup"><div class="settings-grid"><div class="settings-row"><div><strong>Restore your party</strong><p>Recover all HP and Focus. Always free.</p></div><button class="primary-button small-button" data-action="heal">Heal party</button></div><div class="settings-row"><div><strong>Field supplies</strong><p>Replenish potions and Bond Crystals.</p></div><button class="secondary-button small-button" data-action="restock">Restock</button></div></div><div class="modal-actions">${close}</div></div>`;
+  if (modal==='tower') return `<div class="dialogue-followup"><div class="forecast-strip"><div><span>ORACLE PREDICTION</span><strong>0 mm</strong></div><div><span>MEASURED RAINFALL</span><strong class="rain">46 mm</strong></div></div><div class="modal-actions"><button class="primary-button" data-action="dex">Review observations</button>${close}</div></div>`;
+  if (modal==='inferra') return `<div class="dialogue-followup"><div class="evidence-note">Field assignment: record the meadow, riverbank, and canopy by day and night. Six categories, one investigation.</div><div class="modal-actions"><button class="primary-button" data-action="start-investigation">Take the field assignment →</button>${close}</div></div>`;
+  if (modal==='camp') return `<div class="dialogue-followup"><div class="evidence-note">Current time: ${state.time==='day'?'daylight ☀':'nighttime ☾'}. Your existing observations stay recorded.</div><div class="modal-actions"><button class="primary-button" data-action="change-time">Rest until ${state.time==='day'?'night ☾':'day ☀'}</button>${close}</div></div>`;
+  if (modal==='wild') return `<div class="dialogue-followup"><div class="welcome-art">${portrait('creature_voltkit')}</div><div class="evidence-note">Scanning and low HP improve bonding. Patient attempts build trust; a defeated Voltkit can be encountered again.</div><div class="modal-actions">${state.flags.recruitedVoltkit?'<button class="primary-button" data-action="dex">See Voltkit in the DataDex</button>':`<button class="primary-button" data-action="start-battle" data-kind="wild" ${!state.starter?'disabled':''}>Approach Voltkit ◇</button>`}${close}</div></div>`;
+  if (modal==='complete') return `<div class="dialogue-followup completion"><div class="completion-mark">✧</div><h3>A fuller picture of the forest.</h3><div class="reward-row"><span>✥ Sampling Compass</span><span>Sampling bias · Understood</span><span>Discovery recorded</span></div><div class="modal-actions"><button class="primary-button" data-action="close">Keep exploring →</button><button class="secondary-button" data-action="mastery">Try the optional challenge</button></div></div>`;
+  if (modal==='battle-result') {
+    const {won,recruited,events=[]}=modalData;
+    const rested=events.some(event=>event.includes('needs rest'));
+    const headline=recruited?'Voltkit joined your team!':won?'Well played, Observer.':rested?'Your companions are rested.':'Encounter complete.';
+    return `<div class="dialogue-followup completion"><div class="completion-mark">${recruited?'◇':won?'✧':'♧'}</div><h3>${headline}</h3><div class="modal-actions"><button class="primary-button" data-action="close">Continue the adventure →</button>${recruited?'<button class="secondary-button" data-action="dex">See DataDex entry</button>':''}</div></div>`;
+  }
+  if (modal==='mastery') {
+    if (conceptStatus('concept_sampling_bias')==='mastered') return `<div class="modal-actions"><button class="primary-button" data-action="dex">Review discoveries</button>${close}</div>`;
+    return `<div class="dialogue-followup"><h3>Which plan better represents the whole forest?</h3><div class="findings"><button class="finding-button" data-action="master" data-answer="representative">Observe several habitats at different times, using a consistent method in each.</button><button class="finding-button" data-action="master" data-answer="night">Collect many more observations from the same canopy at night.</button><button class="finding-button" data-action="master" data-answer="certain">Watch one creature until we are certain about the entire forest.</button></div><p class="save-info">More observations alone do not fix a method that leaves out important groups.</p></div>`;
+  }
+  if (modalData.returnTo) return `<div class="modal-actions"><button class="primary-button" data-action="dialogue-return">Back to investigation</button></div>`;
+  return `<div class="modal-actions"><button class="primary-button" data-action="close">Continue exploring</button></div>`;
+}
+
+function conversationModal() {
+  const titles={starters:'Choose your first companion',tower:'The rain that wasn’t supposed to fall',camp:state.time==='day'?'Wait for the stars':'Wait for the morning'};
+  const conversation=activeDialogue.conversation;
+  const title=modalData.title || titles[modal] || conversation.title;
+  const subtitle=modalData.subtitle || conversation.subtitle;
+  return modalShell(title,subtitle,dialogueMarkup()+conversationActions(),{wide:modal==='starters'});
+}
+
+function moveDialogue(direction) {
+  if (!activeDialogue) return;
+  activeDialogue=direction==='back'?previousDialogue(activeDialogue):advanceDialogue(activeDialogue);
+  renderModal();
+  chime();
 }
 
 function modalShell(title, subtitle, body, {wide=false,battle=false}={}) {
   return `<div class="modal-backdrop"><section class="modal ${wide?'wide':''}" role="dialog" aria-modal="true" aria-labelledby="modal-heading"><div class="modal-top"><div><p class="eyebrow">${esc(subtitle)}</p><h2 id="modal-heading">${esc(title)}</h2></div>${battle?'<div class="battle-menu"><button data-action="dex" aria-label="Open DataDex">▧ DataDex</button><button data-action="save-menu" aria-label="Open save and load">↓ Save & load</button></div>': '<button class="close-modal" data-action="close" aria-label="Close dialog">×</button>'}</div>${battle ? body : `<div class="modal-content">${body}</div>`}</section></div>`;
 }
 
-function renderModal() {
+function renderModal({resetFocus=false} = {}) {
   if (!modal) return;
+  const previousControl=document.activeElement?.closest('#modal-root button[data-action]');
+  const previousAction=resetFocus?undefined:previousControl?.dataset.action;
+  const previousId=previousControl?.dataset.id;
   let html='';
   if (modal === 'welcome') {
     html=modalShell('Every adventure begins with a question.','WELCOME, OBSERVER',`<div class="welcome-art"><span class="diamond">✧</span>${portrait('creature_statifox')}${portrait('creature_algobear')}${portrait('creature_terradeer')}</div><div class="forecast-strip"><div><span>ORACLE FORECAST · DAY 127</span><strong>0 mm</strong></div><div><span>ACTUAL RAINFALL</span><strong class="rain">46 mm</strong></div><div><span>ARCHIVE STATUS</span><strong style="font-size:17px">“Perfect.”</strong></div></div><p>The fields of Harvest Village are soaked. The Grand Archive insists no rain has fallen. Professor Lyra needs an Observer willing to trust what they can see.</p><label class="name-label" for="observer-name">What should we call you?</label><input id="observer-name" class="text-input" autocomplete="nickname" maxlength="24" value="Observer" placeholder="Your name"><div class="modal-actions"><button class="primary-button" data-action="begin">Begin your journey <span>→</span></button><button class="secondary-button" data-action="close">Explore the village</button></div><p class="save-info">A short, complete prototype adventure. Progress saves in this browser after every action.</p>`);
-  } else if (modal === 'starters') {
-    const descriptions={creature_statifox:'Notices patterns others miss. Quick on its paws, with a sharp eye for evidence.',creature_algobear:'A dependable thinker. Strong defenses and precise, powerful attacks.',creature_terradeer:'Reads the landscape like an old friend. Balanced strength and gentle healing.'};
-    const roles={creature_statifox:'Mathematics & statistics',creature_algobear:'Computer science',creature_terradeer:'Domain knowledge'};
-    html=modalShell('Choose your first companion','PROFESSOR LYRA · THE FIRST BOND',`<p>“Each of them sees the world a little differently. The strongest discoveries come from working together. Who will join your journey?”</p><div class="starter-grid">${['creature_statifox','creature_algobear','creature_terradeer'].map(id=>`<button class="starter-card" data-action="choose" data-id="${id}">${portrait(id,140)}<h3>${esc(creatureName(id))}</h3><span class="type">${roles[id]}</span><p>${descriptions[id]}</p><div class="starter-stats"><span>Lv. 5</span><span>${esc(SPECIES[id]?.role || 'Starter companion')}</span></div><span class="choose">Choose ${esc(creatureName(id))} ↗</span></button>`).join('')}</div>`,{wide:true});
-  } else if (modal === 'lyra') {
-    html=modalShell('Listen to the world','PROFESSOR LYRA · RESEARCH LAB',`<p>“The Oracle’s forecast is only as useful as the observations behind it. Someone may have removed evidence from the Archive.”</p><p>${state.flags.rivalDefeated?'“Professor Inferra is investigating strange reports in the northern forest. Follow the eastern road, and keep your DataDex close.”':'“Kai is waiting in the square. Try your companion’s moves, and scan your opponent. Curiosity is a strength.”'}</p><div class="evidence-note">Your DataDex records creatures and research discoveries. Open it at any time to see how your understanding grows.</div><div class="modal-actions"><button class="primary-button" data-action="dex">Open DataDex</button><button class="secondary-button" data-action="close">Back to exploring</button></div>`);
-  } else if (modal === 'rival') {
-    html=modalShell('A friendly rivalry','KAI · VILLAGE SQUARE',`<p>“There you are, ${esc(state.player.name)}! Let’s see what your new companion can do. I’ll help you up if things go sideways.”</p><div class="evidence-note">Choose an attack to take a turn. Guard reduces incoming damage and restores Focus. Your first DataDex scan is free and reveals your opponent’s recent behavior.</div><p>Healing potions restore HP. After you recruit another companion, you can switch your active Databeast during a battle.</p><div class="modal-actions"><button class="primary-button" data-action="start-battle" data-kind="rival">Challenge Kai ⚔</button><button class="secondary-button" data-action="close">A little more exploring</button></div>`);
-  } else if (modal === 'sanctuary') {
-    html=modalShell('A place to catch your breath','RESEARCH SANCTUARY',`<p>Your companions gather around the warm glow of the sanctuary. The village takes care of its Observers.</p><div class="settings-grid"><div class="settings-row"><div><strong>Restore your party</strong><p>Recover all HP and Focus. Always free.</p></div><button class="primary-button small-button" data-action="heal">Heal party</button></div><div class="settings-row"><div><strong>Field supplies</strong><p>Replenish potions and Bond Crystals for this prototype.</p></div><button class="secondary-button small-button" data-action="restock">Restock</button></div></div><div class="modal-actions"><button class="secondary-button" data-action="close">Back to the village</button></div>`);
-  } else if (modal === 'tower') {
-    html=modalShell('The rain that wasn’t supposed to fall','WEATHER TOWER · FIELD RECORDS',`<div class="forecast-strip"><div><span>ORACLE PREDICTION</span><strong>0 mm</strong></div><div><span>MEASURED RAINFALL</span><strong class="rain">46 mm</strong></div></div><p>The village’s rain gauge disagrees with the Oracle. Farmer Rowan shows you years of handwritten rainfall records.</p><div class="opening-quote">“Our ancestors learned by watching the world. They kept records so the next generation could make better decisions.”</div><p>One bad forecast does not tell us everything about the system. It does give us a reason to investigate its evidence.</p><div class="modal-actions"><button class="primary-button" data-action="dex">Review observations</button><button class="secondary-button" data-action="close">Keep exploring</button></div>`);
-  } else if (modal === 'inferra') {
-    html=modalShell('Is the whole forest nocturnal?','PROFESSOR INFERRA · FIELD STATION',`<p>“The ranger says nearly every Databeast here is active at night. His notes look convincing… until you ask when he goes looking.”</p><div class="evidence-note">Ranger’s notebook: 18 Bayowl and 12 Samplet sightings. All recorded at night, in the canopy. A real observation — from a narrow part of the forest.</div><p>“Visit the meadow, riverbank, and canopy. Observe each one by day <strong>and</strong> by night. Rest at the campfire to change time. Then bring me a fuller picture.”</p><div class="modal-actions"><button class="primary-button" data-action="start-investigation">Take the field assignment →</button><button class="secondary-button" data-action="close">Look around first</button></div>`);
-  } else if (modal === 'camp') {
-    html=modalShell(state.time === 'day'?'Wait for the stars':'Wait for the morning','FOREST CAMP · DAY & NIGHT',`<p>The campfire crackles. Different creatures stir at different times. Changing when you look can change what you discover.</p><div class="evidence-note">Current time: ${state.time === 'day'?'daylight ☀':'nighttime ☾'}. Observations already collected stay in your DataDex.</div><div class="modal-actions"><button class="primary-button" data-action="change-time">Rest until ${state.time === 'day'?'night ☾':'day ☀'}</button><button class="secondary-button" data-action="close">Keep exploring</button></div>`);
+  } else if (activeDialogue) {
+    html=conversationModal();
   } else if (modal === 'habitat') {
     const id=modalData.habitatId; const h=habitats().find(h=>h.id===id); const data=h?.observations?.[state.time] || h?.[state.time] || [];
     const recorded=hasObserved(id,state.time); const active=['active','ready','complete'].includes(quest().status);
     html=modalShell(h?.title || 'Forest habitat',`${state.time === 'day'?'☀ DAYLIGHT':'☾ MOONLIGHT'} · FIELD OBSERVATION`, `<p>${esc(h?.description || 'You take a quiet moment to watch the creatures in this habitat. These sightings belong to this place and this time.')}</p><div class="sighting-list">${data.map(o=>`<div class="sighting">${portrait(o.speciesId,100)}<h3>${esc(creatureName(o.speciesId))}</h3><small>${o.count} sightings</small></div>`).join('')}</div><div class="evidence-note">${recorded?'✓ This habitat and time are already in your field notes.':active?'Record this snapshot to compare it with other habitats and times.':'Meet Professor Inferra at the field station to begin the investigation.'} A sighting count describes what you saw; it does not count every creature living in the forest.</div><div class="modal-actions"><button class="primary-button" data-action="observe" data-id="${esc(id)}" ${recorded||!active?'disabled':''}>${recorded?'Observation recorded ✓':'Record in DataDex'}</button><button class="secondary-button" data-action="close">Continue exploring</button></div>`);
   } else if (modal === 'investigation') html=investigationModal();
-  else if (modal === 'wild') {
-    html=modalShell(state.flags.recruitedVoltkit?'A familiar spark':'A spark in the tall grass','WILD VOLTKIT · SPARK GLADE',`<div class="welcome-art">${portrait('creature_voltkit')}</div><p>${state.flags.recruitedVoltkit?'Your Voltkit gives a cheerful flick of its electric tail. You remember the patient observation that brought you together.':'A Voltkit peeks through the grass. Electricity dances between its ears. Perhaps an Observer with a little patience could earn its trust.'}</p><div class="evidence-note">Scan once for free, lower its HP, then use a Bond Crystal. Scanning and weakening improve your chance to bond. If it escapes the crystal, try again. If you defeat it, you can return for another encounter.</div><div class="modal-actions"><button class="primary-button" data-action="start-battle" data-kind="wild" ${!state.starter||state.flags.recruitedVoltkit?'disabled':''}>Approach Voltkit ◇</button><button class="secondary-button" data-action="close">Leave it in peace</button></div>`);
-  } else if (modal === 'battle') html=battleModal();
-  else if (modal === 'battle-result') {
-    const {won,recruited,events}=modalData;
-    html=modalShell(recruited?'A new bond':won?'The first of many victories':'Every encounter teaches you something','ENCOUNTER COMPLETE',`<div class="completion"><div class="completion-mark">${recruited?'◇':won?'✧':'♧'}</div><h3>${recruited?'Voltkit joined your team!':won?'Well played, Observer.':'Take a breath. Try again.'}</h3><p>${esc(events.join(' '))}</p>${won?'<p>Kai grins. “All right, you’ve got this! The eastern road is open. Professor Inferra is waiting in the forest.”</p>':''}<div class="modal-actions"><button class="primary-button" data-action="close">Continue the adventure →</button>${recruited?'<button class="secondary-button" data-action="dex">See DataDex entry</button>':''}</div></div>`);
-  } else if (modal === 'complete') {
-    html=modalShell('The Nocturnal Mystery, solved','DISCOVERY · THE VALUE OF A BETTER SAMPLE',`<div class="completion"><div class="completion-mark">✧</div><h3>A fuller picture of the forest.</h3><p>“We weren’t studying the whole forest,” Inferra says. “We were only studying the creatures we could see at night.”</p><p>Your observations show that activity varies across habitats and times. The ranger’s sample cannot support his claim about the entire forest. Your broader sample helps, while leaving room for more evidence.</p><div class="reward-row"><span>✥ Sampling Compass</span><span>Sampling bias · Understood</span><span>Research discovery recorded</span></div><div class="modal-actions"><button class="primary-button" data-action="close">Keep exploring →</button><button class="secondary-button" data-action="mastery">Try the optional challenge</button></div></div>`);
-  } else if (modal === 'mastery' && conceptStatus('concept_sampling_bias') === 'mastered') {
-    html=modalShell('A thoughtful field researcher','SAMPLING BIAS ? MASTERED','<p>Your DataDex has recorded your mastery: observe several habitats at different times using a consistent method. More observations help, and the collection method still matters.</p><div class="modal-actions"><button class="primary-button" data-action="dex">Review discoveries</button><button class="secondary-button" data-action="close">Keep exploring</button></div>');
-  } else if (modal === 'mastery') {
-    html=modalShell('Plan the next expedition','OPTIONAL CHALLENGE · SAMPLING BIAS',`<p>Inferra wants to learn about activity across the <strong>whole forest</strong>. Which plan gives her a more representative sample?</p><div class="findings"><button class="finding-button" data-action="master" data-answer="representative">Observe several habitats at different times, using a consistent method in each.</button><button class="finding-button" data-action="master" data-answer="night">Collect many more observations from the same canopy at night.</button><button class="finding-button" data-action="master" data-answer="certain">Watch one creature until we are certain about the entire forest.</button></div><p class="save-info">More observations alone do not fix a sampling method that leaves out important groups.</p>`);
-  } else if (modal === 'dex') html=dexModal();
+  else if (modal === 'battle') html=battleModal();
+  else if (modal === 'dex') html=dexModal();
   else if (modal === 'save') html=saveModal();
   else if (modal === 'reset') {
     html=modalShell('Begin a new journey?','SAVE & LOAD',`<p>This replaces the progress saved in this browser. You can export your current journey first to keep it.</p><div class="modal-actions"><button class="secondary-button" data-action="export">Export current save</button><button class="danger-button" data-action="reset-confirm">Start a new journey</button><button class="secondary-button" data-action="save-menu">Keep playing</button></div>`);
@@ -287,10 +364,21 @@ function renderModal() {
     html=modalShell('Follow the village paths',state.map==='forest'?'TWIN SCHOLARS’ FOREST · PLACES TO VISIT':'HARVEST VILLAGE · PLACES TO VISIT',`<p>Click a place below to walk there. You can also click directly on the map or use WASD and the arrow keys.</p><div class="destination-list">${currentTargets().filter(t=>t.id!=='sign').map(t=>`<button data-action="walk-to" data-id="${esc(t.id)}">${esc(t.name)} <span style="float:right">↗</span></button>`).join('')}</div>`);
   } else if (modal === 'help') {
     html=modalShell('Your first field guide','THE CHRONICLES OF DATA · STAGE 1',`<p>Explore a small original RPG world, form a team, and uncover a misleading claim by collecting evidence. You can complete the investigation with any starter.</p><table class="control-table"><tr><td>Walk</td><td>WASD / arrow keys / click map</td></tr><tr><td>Talk, observe, or enter</td><td>E / Space / click a place</td></tr><tr><td>Open DataDex</td><td>X</td></tr><tr><td>Save & load</td><td>P</td></tr><tr><td>Close a dialog</td><td>Escape</td></tr></table><p>Choose a companion in Lyra’s lab, battle Kai, then enter the forest from the eastern gate. Speak to Inferra and observe each habitat by day and night. Rest at the campfire to change time.</p><p>Visit the sanctuary for free healing and supplies. Battles are turn based: scan, attack, guard, switch, use a potion, or bond with a weakened wild creature.</p><div class="evidence-note">This prototype includes one village, one route, three starters, Kai’s battle, Voltkit recruitment, and one complete investigation. Later chapter regions and evolutions belong to future stages.</div><div class="modal-actions"><button class="primary-button" data-action="close">Back to the adventure</button><button class="secondary-button" data-action="places">Places to visit</button></div>`);
-  } else if (modal === 'dialogue') html=modalShell(modalData.title,modalData.subtitle,`<p>${esc(modalData.text)}</p><div class="modal-actions"><button class="primary-button" data-action="close">Continue exploring</button></div>`);
+  }
   $('modal-root').innerHTML=html;
   paintPortraits($('modal-root'));
-  const focusable=$('modal-root').querySelector('input, button:not(:disabled), [tabindex="0"]');
+  const root=$('modal-root');
+  let focusable;
+  if (activeDialogue) {
+    focusable=[...root.querySelectorAll('button:not(:disabled)')].find(button=>button.dataset.action===previousAction&&(!previousId||button.dataset.id===previousId));
+    focusable ||= isDialogueComplete(activeDialogue) ? root.querySelector('.dialogue-followup button:not(:disabled), .modal-actions button:not(:disabled)') : root.querySelector('[data-action="dialogue-next"]');
+    const segment=currentSegment(activeDialogue);
+    const announcement=resolveSpeaker(segment.speaker,state.player.name).name+': '+segment.text;
+    if ($('dialogue-announcer').textContent!==announcement) $('dialogue-announcer').textContent=announcement;
+  } else {
+    focusable=root.querySelector('input, button:not(:disabled), [tabindex="0"]');
+    $('dialogue-announcer').textContent='';
+  }
   focusable?.focus({preventScroll:true});
   const log=$('modal-root').querySelector('.battle-log'); if (log) log.scrollTop=log.scrollHeight;
 }
@@ -347,7 +435,11 @@ function exportSave() {
 $('modal-root').addEventListener('click',event=>{
   const button=event.target.closest('button[data-action]'); if (!button || button.disabled) return;
   const a=button.dataset.action;
-  if (a==='close') closeModal();
+  if (activeDialogue && !isDialogueComplete(activeDialogue) && !['dialogue-next','dialogue-back','close'].includes(a)) return;
+  if (a==='dialogue-next') moveDialogue('next');
+  else if (a==='dialogue-back') moveDialogue('back');
+  else if (a==='dialogue-return') openModal(modalData.returnTo);
+  else if (a==='close') closeModal();
   else if (a==='begin') { const name=$('observer-name').value.trim()||'Observer'; if (dispatch({type:'SET_NAME',name},{quiet:true})) openModal('starters'); }
   else if (a==='choose') { if(dispatch({type:'CHOOSE_STARTER',speciesId:button.dataset.id})){closeModal();chime('success');} }
   else if (a==='start-battle') { if(dispatch({type:'START_BATTLE',kind:button.dataset.kind},{quiet:true}))openModal('battle'); }
@@ -360,11 +452,26 @@ $('modal-root').addEventListener('click',event=>{
   else if (a==='switch') dispatch({type:'BATTLE_SWITCH',index:Number(button.dataset.index)},{quiet:true});
   else if (a==='heal') dispatch({type:'HEAL_PARTY'});
   else if (a==='restock') dispatch({type:'RESTOCK'});
-  else if (a==='start-investigation') { if(dispatch({type:'START_INVESTIGATION'}))openModal('investigation'); }
+  else if (a==='start-investigation') { if(dispatch({type:'START_INVESTIGATION'},{quiet:true}))openModal('investigation'); }
   else if (a==='observe') { dispatch({type:'OBSERVE',habitatId:button.dataset.id});chime('success'); }
   else if (a==='change-time') { if(dispatch({type:'SET_TIME',time:state.time==='day'?'night':'day'})){closeModal();chime();} }
-  else if (a==='finding') { const complete=quest().status==='complete'; if(dispatch({type:'SUBMIT_FINDING',answer:button.dataset.answer})&&!complete&&quest().status==='complete'){openModal('complete');chime('success');} }
-  else if (a==='hint') dispatch({type:'REQUEST_HINT'});
+  else if (a==='finding') {
+    const wasComplete=quest().status==='complete';
+    if (dispatch({type:'SUBMIT_FINDING',answer:button.dataset.answer},{quiet:true})) {
+      if (!wasComplete && quest().status==='complete') {openModal('complete');chime('success');}
+      else openDialogue('Look again at the evidence','PROFESSOR INFERRA', '',null,{
+        speaker:'inferra',expression:'thoughtful',returnTo:'investigation',
+        segments:button.dataset.answer==='nocturnal'
+          ? ['Look at the daytime records you collected.','Can a night-only sample describe the activity of the whole forest?']
+          : ['Your observations give us useful evidence.','They do not establish certainty about every creature or future sighting.']
+      });
+    }
+  }
+  else if (a==='hint') {
+    if (dispatch({type:'REQUEST_HINT'},{quiet:true})) openDialogue('A nudge from Inferra','FIELD GUIDANCE','',null,{
+      speaker:'inferra',expression:'thoughtful',returnTo:'investigation',segments:samplingHints[Math.min(quest().hints,3)-1]
+    });
+  }
   else if (a==='master') { const before=conceptStatus('concept_sampling_bias'); if(dispatch({type:'MASTER_CONCEPT',answer:button.dataset.answer}) && conceptStatus('concept_sampling_bias')==='mastered'){openModal('dex');dexTab='knowledge';renderModal();if(before!=='mastered')chime('success');} }
   else if (a==='mastery') openModal('mastery');
   else if (a==='dex') openModal('dex');
@@ -374,7 +481,7 @@ $('modal-root').addEventListener('click',event=>{
   else if (a==='walk-to') { const target=currentTargets().find(t=>t.id===button.dataset.id);closeModal();if(target)goTo(target); }
   else if (a==='save') {persist(true);renderModal();}
   else if (a==='load') {
-    try { const loaded=storage&&loadGame(storage);if(!loaded){toast('No valid browser save was found. Import a backup or keep playing.');return;}state=checkedWorldState(loaded);path=[];updateUI();modal=state.battle?'battle':'save';renderModal();toast('Your saved journey has been restored.'); } catch(error){toast(error.message||'The save could not be loaded.');}
+    try { const loaded=storage&&loadGame(storage);if(!loaded){toast('No valid browser save was found. Import a backup or keep playing.');return;}state=checkedWorldState(loaded);path=[];updateUI();openModal(state.battle?'battle':'save');toast('Your saved journey has been restored.'); } catch(error){toast(error.message||'The save could not be loaded.');}
   } else if (a==='export') exportSave();
   else if (a==='import') $('import-file').click();
   else if (a==='reset') openModal('reset');
@@ -401,6 +508,18 @@ $('world').addEventListener('click',event=>{
 
 document.addEventListener('keydown',event=>{
   if(modal){
+    if (activeDialogue && !event.ctrlKey && !event.metaKey && !event.altKey && !/INPUT|TEXTAREA|SELECT/.test(event.target.tagName)) {
+      const key=event.key.toLowerCase();
+      if (['enter',' ','e'].includes(key)) {
+        if (event.repeat || heldDialogueKeys.has(key)) {event.preventDefault();return;}
+        const focusedAction=event.target.closest('button')?.dataset.action;
+        if (key==='e' || (!isDialogueComplete(activeDialogue) && (!focusedAction || focusedAction==='dialogue-next'))) {
+          event.preventDefault();heldDialogueKeys.add(key);
+          if (!isDialogueComplete(activeDialogue)) moveDialogue('next');
+          return;
+        }
+      }
+    }
     if(!/INPUT|TEXTAREA|SELECT/.test(event.target.tagName)&&!event.ctrlKey&&!event.metaKey&&['p','P','x','X'].includes(event.key)){
       event.preventDefault();openModal(event.key.toLowerCase()==='p'?'save':'dex');return;
     }
@@ -411,7 +530,7 @@ document.addEventListener('keydown',event=>{
       if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus();}
       else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus();}
     }
-    if(event.key==='Enter'&&event.target.id==='observer-name')$('modal-root').querySelector('[data-action="begin"]')?.click();
+    if(event.key==='Enter'&&event.target.id==='observer-name') {event.preventDefault();$('modal-root').querySelector('[data-action="begin"]')?.click();}
     return;
   }
   if(/INPUT|TEXTAREA|SELECT/.test(event.target.tagName)||event.ctrlKey||event.metaKey||event.altKey)return;
@@ -422,6 +541,8 @@ document.addEventListener('keydown',event=>{
   else if(event.key==='p'||event.key==='P'){event.preventDefault();openModal('save');}
   else if(event.key==='x'||event.key==='X'){event.preventDefault();openModal('dex');}
 });
+document.addEventListener('keyup',event=>heldDialogueKeys.delete(event.key.toLowerCase()));
+window.addEventListener('blur',()=>heldDialogueKeys.clear());
 
 $('dex-button').addEventListener('click',()=>openModal('dex'));
 $('save-button').addEventListener('click',()=>openModal('save'));

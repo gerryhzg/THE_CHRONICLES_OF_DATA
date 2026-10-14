@@ -58,7 +58,48 @@ const action = (name, extra = '') => click(`[data-action="${name}"]${extra}`);
 const saved = () => evaluate(`JSON.parse(localStorage.getItem(${JSON.stringify(saveKey)}))`);
 const waitHeading = text => eventually(() => evaluate(`document.querySelector('#modal-heading')?.textContent.includes(${JSON.stringify(text)})`), `Dialog did not open: ${text}`);
 
+async function pressKey(key, code, windowsVirtualKeyCode, autoRepeat = false) {
+  const text = key === 'Enter' ? '\r' : key.length === 1 ? key : undefined;
+  await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key, code, windowsVirtualKeyCode, autoRepeat, ...(text === undefined ? {} : { text, unmodifiedText: text }) });
+  await cdp('Input.dispatchKeyEvent', { type: 'keyUp', key, code, windowsVirtualKeyCode });
+}
+
+const dialogue = () => evaluate(`(() => {
+  const box = document.querySelector('.dialogue-box');
+  if (!box) return null;
+  const portrait = box.querySelector('svg[role="img"]');
+  const bounds = portrait?.getBoundingClientRect();
+  return {
+    line: box.querySelector('#dialogue-line')?.textContent.trim(),
+    speaker: box.querySelector('#dialogue-speaker')?.textContent.trim(),
+    speakerId: box.dataset.speakerId,
+    expression: box.dataset.expression,
+    portrait: portrait?.outerHTML,
+    portraitLabel: portrait?.getAttribute('aria-label'),
+    portraitVisible: !!bounds && bounds.width > 0 && bounds.height > 0,
+    nextEnabled: !!box.querySelector('[data-action="dialogue-next"]:not(:disabled)'),
+    backEnabled: !!box.querySelector('[data-action="dialogue-back"]:not(:disabled)')
+  };
+})()`);
+
+async function finishDialogue() {
+  const segments = [];
+  for (let i = 0; i < 30; i++) {
+    const segment = await dialogue();
+    if (segment) {
+      assert.ok(segment.line, 'The current dialogue segment must contain text');
+      assert.ok(segment.speaker, 'Every segment must identify its active speaker');
+      assert.ok(segment.portrait && segment.portraitVisible, 'Every segment must show a visible speaker portrait');
+      segments.push(segment);
+    }
+    if (!await evaluate(`!!document.querySelector('[data-action="dialogue-next"]:not(:disabled)')`)) return segments;
+    await action('dialogue-next');
+  }
+  throw new Error('Conversation did not finish after 30 segments');
+}
+
 async function close() {
+  await finishDialogue();
   await click('#modal-root [data-action="close"]');
   await eventually(() => evaluate(`!document.querySelector('#modal-root .modal')`), 'Dialog did not close');
 }
@@ -107,9 +148,61 @@ try {
   await waitHeading('Every adventure');
   await evaluate(`document.querySelector('#observer-name').value = 'Smoke Observer'`);
   await action('begin');
+  const firstLine = await dialogue();
+  assert.ok(firstLine?.line && firstLine.speaker.includes('Lyra'), 'Starter introduction must identify Professor Lyra');
+  assert.ok(firstLine.portrait && firstLine.portraitVisible && firstLine.portraitLabel, 'Lyra must have a visible accessible portrait');
+  assert.equal(firstLine.backEnabled, false, 'Back must be unavailable on the first segment');
+  assert.equal(await evaluate(`document.querySelectorAll('#dialogue-line').length`), 1, 'Only one dialogue segment must be displayed');
+  assert.equal(await evaluate(`!!document.querySelector('[data-action="choose"]')`), false, 'Starter choices must wait until the final segment');
+  const beforeDialogueMovement = await saved();
+  await pressKey('d', 'KeyD', 68);
+  assert.deepEqual((await saved()).player, beforeDialogueMovement.player, 'Player movement must stop during dialogue');
+  assert.deepEqual(await dialogue(), firstLine, 'Movement keys must not advance dialogue');
+  await screenshot('dialogue.png');
+  await screenshot('dialogue-mobile.png', true);
+  assert.equal(await evaluate(`(() => {
+    const portrait = document.querySelector('.dialogue-box svg[role="img"]')?.getBoundingClientRect();
+    const line = document.querySelector('#dialogue-line')?.getBoundingClientRect();
+    return document.documentElement.scrollWidth <= 390 && !!portrait && portrait.left >= 0 && portrait.right <= 390 && !!line && line.right <= 390;
+  })()`), true, 'Mobile conversation and portrait must fit within the screen');
+  await cdp('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1050, deviceScaleFactor: 1, mobile: false });
+  await action('dialogue-next');
+  const secondLine = await dialogue();
+  assert.notEqual(secondLine.line, firstLine.line, 'Next must reveal a different segment');
+  await action('dialogue-back');
+  assert.deepEqual(await dialogue(), firstLine, 'Back must restore the preceding text, speaker and portrait');
+  await pressKey('Enter', 'Enter', 13);
+  assert.deepEqual(await dialogue(), secondLine, 'Enter must advance exactly one segment');
+  await pressKey('Enter', 'Enter', 13, true);
+  assert.deepEqual(await dialogue(), secondLine, 'Held key repeats must not skip dialogue');
+  await evaluate(`document.querySelector('[data-action="dialogue-back"]').focus()`);
+  await pressKey('Enter', 'Enter', 13);
+  assert.deepEqual(await dialogue(), firstLine, 'Keyboard activation of Back must go back without also advancing');
+  await pressKey(' ', 'Space', 32);
+  assert.deepEqual(await dialogue(), secondLine, 'Space must advance exactly one segment');
+  await pressKey('e', 'KeyE', 69);
+  const thirdLine = await dialogue();
+  assert.notEqual(thirdLine.line, secondLine.line, 'E must advance dialogue');
+  const introduction = [firstLine, secondLine, thirdLine, ...await finishDialogue()];
+  assert.ok(new Set(introduction.map(segment => segment.expression)).size > 1, 'Lyra must change expression during her conversation');
+  assert.equal((await dialogue()).nextEnabled, false, 'Next must stop at the final segment');
+  assert.equal(await evaluate(`document.querySelectorAll('[data-action="choose"]').length`), 3, 'All three starters must be available after dialogue');
+  const finalLine = await dialogue();
+  await pressKey('e', 'KeyE', 69);
+  await pressKey('Enter', 'Enter', 13, true);
+  assert.deepEqual(await dialogue(), finalLine, 'Advancement and held keys must stop at the dialogue boundary');
+  assert.equal((await saved()).starter, null, 'Advancement keys must not select a newly revealed starter');
+  await action('dialogue-back');
+  assert.equal(await evaluate(`!!document.querySelector('[data-action="choose"]')`), false, 'Reviewing an earlier segment must hide final choices');
+  await pressKey('Escape', 'Escape', 27);
+  assert.equal(await evaluate(`!!document.querySelector('#modal-root .modal')`), false, 'Escape must dismiss a conversation');
+  assert.equal((await saved()).starter, null, 'Dismissal must not make a dialogue choice');
+  await visit('lab', 'Choose your first companion');
+  assert.deepEqual(await dialogue(), firstLine, 'Reopening a conversation must start with its first segment');
+  await finishDialogue();
   await action('choose', '[data-id="creature_statifox"]');
   assert.equal((await saved()).starter, 'creature_statifox');
-  checks.push('App startup, naming, starter choice, autosave');
+  checks.push('Portrait dialogue, expression changes, sequential Next/Back, Enter/Space/E, held-key guard, choice boundary, Escape, mobile fit, startup and autosave');
   await screenshot('prototype.png');
   await screenshot('mobile.png', true);
   assert.equal(await evaluate('document.documentElement.scrollWidth <= 390'), true, 'Mobile page must fit horizontally');
@@ -133,6 +226,7 @@ try {
   assert.equal((await saved()).map, 'village');
   await close();
   await visit('kai', 'A friendly rivalry');
+  await finishDialogue();
   await action('start-battle', '[data-kind="rival"]');
   await action('guard');
   const beforeScan = await saved();
@@ -150,14 +244,24 @@ try {
   checks.push('Path walking, lab dialogue, locked gate, Kai victory, free scan, guard, potion');
 
   await visit('tower', 'The rain');
+  const towerConversation = await finishDialogue();
+  assert.ok(new Set(towerConversation.map(segment => segment.speakerId)).size > 1, 'The tower conversation must display multiple speakers');
+  for (let i = 1; i < towerConversation.length; i++) {
+    if (towerConversation[i].speakerId !== towerConversation[i - 1].speakerId) {
+      assert.notEqual(towerConversation[i].speaker, towerConversation[i - 1].speaker, 'Speaker labels must update when the speaker changes');
+      assert.notEqual(towerConversation[i].portrait, towerConversation[i - 1].portrait, 'Portraits must update when the speaker changes');
+    }
+  }
   await close();
+  checks.push('Multi-speaker dialogue updates active names and portraits');
   await visit('gate');
   await visit('inferra', 'nocturnal');
+  await finishDialogue();
   await action('start-investigation');
   await action('hint');
   await close();
   for (const time of ['day', 'night']) {
-    if ((await saved()).time !== time) { await visit('camp', 'Wait for'); await action('change-time'); }
+    if ((await saved()).time !== time) { await visit('camp', 'Wait for'); await finishDialogue(); await action('change-time'); }
     for (const [id, title] of [['meadow', 'Sunlit Meadow'], ['riverbank', 'Riverbank'], ['canopy', 'High Canopy']]) {
       await visit(id, title);
       await action('observe');
@@ -168,15 +272,20 @@ try {
   await visit('inferra', 'The Nocturnal Mystery');
   await action('finding', '[data-answer="nocturnal"]');
   assert.equal((await saved()).quests.nocturnal.status, 'ready');
+  await finishDialogue();
+  await action('dialogue-return');
   await action('finding', '[data-answer="biased"]');
   assert.equal((await saved()).flags.compass, true);
+  await finishDialogue();
   await action('mastery');
+  await finishDialogue();
   await action('master', '[data-answer="representative"]');
   assert.equal((await saved()).dex.concepts.concept_sampling_bias, 'mastered');
   await close();
   checks.push('All six habitat/time observations, hint, revised conclusion, Sampling Compass, optional mastery');
 
   await visit('voltkit', 'A spark in');
+  await finishDialogue();
   await action('start-battle', '[data-kind="wild"]');
   await action('scan');
   await action('battle-move', '[data-id="observe_strike"]');
@@ -197,6 +306,7 @@ try {
 
   await visit('exit');
   await visit('sanctuary', 'catch your breath');
+  await finishDialogue();
   await action('heal');
   await action('restock');
   const healed = await saved();
@@ -234,7 +344,7 @@ try {
   checks.push('Sanctuary healing/restocking, DataDex field notes, export/new journey/import, final reload');
   await screenshot('completed.png');
   assert.deepEqual(errors, [], 'Browser runtime must have no errors');
-  await writeFile(resolve(artifactDir, 'browser-smoke.json'), JSON.stringify({ status: 'passed', url, checks, errors, screenshots: ['prototype.png', 'mobile.png', 'completed.png'] }, null, 2));
+  await writeFile(resolve(artifactDir, 'browser-smoke.json'), JSON.stringify({ status: 'passed', url, checks, errors, screenshots: ['dialogue.png', 'dialogue-mobile.png', 'prototype.png', 'mobile.png', 'completed.png'] }, null, 2));
   console.log(JSON.stringify({ status: 'passed', checks, errors }, null, 2));
 } catch (error) {
   errors.push(error.stack || error.message);
