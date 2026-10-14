@@ -44,11 +44,6 @@ const observations = () => quest().observations || [];
 const hasObserved = (habitatId, time) => observations().some(o => o.habitatId === habitatId && o.time === time);
 const dexEntry = (id) => state.dex.species[id] || {};
 const habitatName = (id) => habitats().find(h => h.id === id)?.title || id;
-const samplingHints=[
-  ['The ranger visits only the canopy, and only at night.','Which habitats and times are missing from his notebook?'],
-  ['Compare the same habitat in daylight and moonlight, then compare habitats.','Does one place at one time represent all of them?'],
-  ['A night-only sample favors the creatures visible at night.','It cannot establish that nearly every creature in the forest is nocturnal.']
-];
 
 function toast(message) {
   $('toast').textContent = message;
@@ -225,7 +220,7 @@ function interact(target = nearTarget()) {
   else if (target.id === 'sign') openModal('places');
   else if (target.id === 'tower') openModal('tower');
   else if (target.id === 'inferra') {
-    if (quest().status === 'locked') openModal('inferra'); else openModal('investigation');
+    openModal('inferra');
   } else if (target.id === 'camp') openModal('camp');
   else if (['meadow','riverbank','canopy'].includes(target.id)) openModal('habitat',{habitatId:`habitat_${target.id}`});
   else if (target.id === 'voltkit') openModal('wild');
@@ -239,6 +234,7 @@ function openModal(type, data = {}) {
   if (!modal) returnFocus=document.activeElement;
   path=[]; pathTarget=null; modal=type; modalData=data;
   activeDialogue=prepareDialogue(type,data);
+  if (activeDialogue && data.resumeDialogue) activeDialogue={...activeDialogue,index:activeDialogue.conversation.segments.length-1};
   renderModal({resetFocus:true}); updatePrompt();
 }
 function closeModal() {
@@ -256,6 +252,7 @@ function prepareDialogue(type, data = {}) {
   const context={
     playerName:state.player.name,starterName:creatureName(state.starter),
     rivalDefeated:state.flags.rivalDefeated,questStatus:quest().status,
+    observationCount:observations().length,mastered:conceptStatus('concept_sampling_bias')==='mastered',
     recruited:state.flags.recruitedVoltkit,time:state.time,...data
   };
   if (conversationTypes.has(type)) {
@@ -303,7 +300,10 @@ function conversationActions() {
   if (modal==='rival') return `<div class="dialogue-followup"><div class="evidence-note">Potions restore HP. After recruiting another companion, switching takes a turn.</div><div class="modal-actions"><button class="primary-button" data-action="start-battle" data-kind="rival">Challenge Kai ⚔</button>${close}</div></div>`;
   if (modal==='sanctuary') return `<div class="dialogue-followup"><div class="settings-grid"><div class="settings-row"><div><strong>Restore your party</strong><p>Recover all HP and Focus. Always free.</p></div><button class="primary-button small-button" data-action="heal">Heal party</button></div><div class="settings-row"><div><strong>Field supplies</strong><p>Replenish potions and Bond Crystals.</p></div><button class="secondary-button small-button" data-action="restock">Restock</button></div></div><div class="modal-actions">${close}</div></div>`;
   if (modal==='tower') return `<div class="dialogue-followup"><div class="forecast-strip"><div><span>ORACLE PREDICTION</span><strong>0 mm</strong></div><div><span>MEASURED RAINFALL</span><strong class="rain">46 mm</strong></div></div><div class="modal-actions"><button class="primary-button" data-action="dex">Review observations</button>${close}</div></div>`;
-  if (modal==='inferra') return `<div class="dialogue-followup"><div class="evidence-note">Field assignment: record the meadow, riverbank, and canopy by day and night. Six categories, one investigation.</div><div class="modal-actions"><button class="primary-button" data-action="start-investigation">Take the field assignment →</button>${close}</div></div>`;
+  if (modal==='inferra') {
+    if (quest().status==='locked') return `<div class="dialogue-followup"><div class="evidence-note">Field assignment: record the meadow, riverbank, and canopy by day and night. Six categories, one investigation.</div><div class="modal-actions"><button class="primary-button" data-action="start-investigation">Take the field assignment →</button>${close}</div></div>`;
+    return `<div class="dialogue-followup"><div class="evidence-note">${quest().status==='complete'?'Investigation complete · Sampling Compass earned':`${observations().length} / 6 habitat and time observations recorded`}</div><div class="modal-actions"><button class="primary-button" data-action="investigation">Review investigation</button>${quest().status==='complete'?'<button class="secondary-button" data-action="mastery">Sampling mastery</button><button class="secondary-button" data-action="dex">Review discoveries</button>':''}${close}</div></div>`;
+  }
   if (modal==='camp') return `<div class="dialogue-followup"><div class="evidence-note">Current time: ${state.time==='day'?'daylight ☀':'nighttime ☾'}. Your existing observations stay recorded.</div><div class="modal-actions"><button class="primary-button" data-action="change-time">Rest until ${state.time==='day'?'night ☾':'day ☀'}</button>${close}</div></div>`;
   if (modal==='wild') return `<div class="dialogue-followup"><div class="welcome-art">${portrait('creature_voltkit')}</div><div class="evidence-note">Scanning and low HP improve bonding. Patient attempts build trust; a defeated Voltkit can be encountered again.</div><div class="modal-actions">${state.flags.recruitedVoltkit?'<button class="primary-button" data-action="dex">See Voltkit in the DataDex</button>':`<button class="primary-button" data-action="start-battle" data-kind="wild" ${!state.starter?'disabled':''}>Approach Voltkit ◇</button>`}${close}</div></div>`;
   if (modal==='complete') return `<div class="dialogue-followup completion"><div class="completion-mark">✧</div><h3>A fuller picture of the forest.</h3><div class="reward-row"><span>✥ Sampling Compass</span><span>Sampling bias · Understood</span><span>Discovery recorded</span></div><div class="modal-actions"><button class="primary-button" data-action="close">Keep exploring →</button><button class="secondary-button" data-action="mastery">Try the optional challenge</button></div></div>`;
@@ -317,12 +317,12 @@ function conversationActions() {
     if (conceptStatus('concept_sampling_bias')==='mastered') return `<div class="modal-actions"><button class="primary-button" data-action="dex">Review discoveries</button>${close}</div>`;
     return `<div class="dialogue-followup"><h3>Which plan better represents the whole forest?</h3><div class="findings"><button class="finding-button" data-action="master" data-answer="representative">Observe several habitats at different times, using a consistent method in each.</button><button class="finding-button" data-action="master" data-answer="night">Collect many more observations from the same canopy at night.</button><button class="finding-button" data-action="master" data-answer="certain">Watch one creature until we are certain about the entire forest.</button></div><p class="save-info">More observations alone do not fix a method that leaves out important groups.</p></div>`;
   }
-  if (modalData.returnTo) return `<div class="modal-actions"><button class="primary-button" data-action="dialogue-return">Back to investigation</button></div>`;
+  if (modalData.returnTo) return `<div class="modal-actions"><button class="primary-button" data-action="dialogue-return">${esc(modalData.returnLabel || 'Back to investigation')}</button></div>`;
   return `<div class="modal-actions"><button class="primary-button" data-action="close">Continue exploring</button></div>`;
 }
 
 function conversationModal() {
-  const titles={starters:'Choose your first companion',tower:'The rain that wasn’t supposed to fall',camp:state.time==='day'?'Wait for the stars':'Wait for the morning'};
+  const titles={starters:'Choose your first companion',tower:'The rain that wasn’t supposed to fall',camp:state.time==='day'?'Wait for the stars':'Wait for the morning',inferra:quest().status==='locked'?'Is the whole forest nocturnal?':quest().status==='complete'?'A fuller picture of the forest':'The Nocturnal Mystery'};
   const conversation=activeDialogue.conversation;
   const title=modalData.title || titles[modal] || conversation.title;
   const subtitle=modalData.subtitle || conversation.subtitle;
@@ -391,12 +391,7 @@ function investigationModal() {
   const totals={day:0,night:0};
   observations().forEach(o=>{const h=habitats().find(h=>h.id===o.habitatId); const data=o.sightings||o.observations||h?.observations?.[o.time]||h?.[o.time]||[]; totals[o.time]+=(Array.isArray(data)?data.reduce((n,s)=>n+s.count,0):0);});
   const max=Math.max(totals.day,totals.night,1);
-  const hintTexts=[
-    'The ranger visits only the canopy, and only at night. What part of the forest is missing from his notebook?',
-    'Compare the same habitat in daylight and moonlight. Then compare habitats. Does one place and time represent all of them?',
-    'A sample collected only at night is biased toward creatures visible at night. It does not establish that nearly every creature in the forest is nocturnal.'
-  ];
-  return modalShell('The Nocturnal Mystery',`C1-03 · ${complete?'INVESTIGATION COMPLETE':`${count} / 6 FIELD OBSERVATIONS`}`,`<p>The ranger claims nearly every forest Databeast is nocturnal. His original sample came only from the canopy at night. Test whether those records represent the entire forest.</p><div class="sampling-grid"><div class="sample-heading">HABITAT</div><div class="sample-heading">☀ DAYLIGHT</div><div class="sample-heading">☾ MOONLIGHT</div>${habitats().map(h=>`<div class="sample-title">${esc(h.title)}</div>${['day','night'].map(t=>`<div class="${hasObserved(h.id,t)?'recorded':''}">${hasObserved(h.id,t)?'✓ Recorded':state.flags.compass?'✥ Unobserved':'○ Not observed'}</div>`).join('')}`).join('')}</div><h3>What your sample shows</h3><div class="chart-legend"><span><i></i>Day sightings</span><span><i class="night"></i>Night sightings</span></div><div class="research-chart">${['day','night'].map(t=>`<div class="chart-row ${t}"><span>${t==='day'?'Daylight':'Moonlight'}</span><div class="bar"><i style="width:${totals[t]/max*100}%"></i></div><span>${totals[t]}</span></div>`).join('')}</div><div class="evidence-note">These are recorded sightings, not a census of unique creatures or an estimate of an individual creature’s probability of activity. Compare habitat and time coverage before drawing a conclusion.</div>${complete?'<p><strong>Conclusion:</strong> The initial sample was biased. Activity varies across habitats and times; the ranger’s records cannot justify a claim about the entire forest.</p><div class="modal-actions"><button class="primary-button" data-action="mastery">Optional mastery challenge</button><button class="secondary-button" data-action="dex">View learning entry</button></div>':`<h3>What can we conclude?</h3><div class="findings"><button class="finding-button" data-action="finding" data-answer="nocturnal" ${count<6?'disabled':''}>Nearly every forest Databeast must be nocturnal.</button><button class="finding-button" data-action="finding" data-answer="biased" ${count<6?'disabled':''}>The ranger’s sample leaves out habitats and times. We need broader evidence.</button><button class="finding-button" data-action="finding" data-answer="certain" ${count<6?'disabled':''}>Our new sample proves exactly how every creature will behave.</button></div>${count<6?'<p class="save-info">Visit all three habitats in both daylight and moonlight before submitting your finding.</p>':''}<div class="modal-actions"><button class="secondary-button" data-action="hint">${q.hints>=3?'Review guided explanation':'A nudge from Inferra'}</button><button class="secondary-button" data-action="close">Back to the field</button></div>${q.hints>0?`<div class="hint-box">${hintTexts[Math.min(q.hints,3)-1]}</div>`:''}`}`,{wide:true});
+  return modalShell('The Nocturnal Mystery',`C1-03 · ${complete?'INVESTIGATION COMPLETE':`${count} / 6 FIELD OBSERVATIONS`}`,`<p>The ranger claims nearly every forest Databeast is nocturnal. His original sample came only from the canopy at night. Test whether those records represent the entire forest.</p><div class="sampling-grid"><div class="sample-heading">HABITAT</div><div class="sample-heading">☀ DAYLIGHT</div><div class="sample-heading">☾ MOONLIGHT</div>${habitats().map(h=>`<div class="sample-title">${esc(h.title)}</div>${['day','night'].map(t=>`<div class="${hasObserved(h.id,t)?'recorded':''}">${hasObserved(h.id,t)?'✓ Recorded':state.flags.compass?'✥ Unobserved':'○ Not observed'}</div>`).join('')}`).join('')}</div><h3>What your sample shows</h3><div class="chart-legend"><span><i></i>Day sightings</span><span><i class="night"></i>Night sightings</span></div><div class="research-chart">${['day','night'].map(t=>`<div class="chart-row ${t}"><span>${t==='day'?'Daylight':'Moonlight'}</span><div class="bar"><i style="width:${totals[t]/max*100}%"></i></div><span>${totals[t]}</span></div>`).join('')}</div><div class="evidence-note">These are recorded sightings, not a census of unique creatures or an estimate of an individual creature’s probability of activity. Compare habitat and time coverage before drawing a conclusion.</div>${complete?'<p><strong>Conclusion:</strong> The initial sample was biased. Activity varies across habitats and times; the ranger’s records cannot justify a claim about the entire forest.</p><div class="modal-actions"><button class="primary-button" data-action="mastery">Optional mastery challenge</button><button class="secondary-button" data-action="dex">View learning entry</button></div>':`<h3>What can we conclude?</h3><div class="findings"><button class="finding-button" data-action="finding" data-answer="nocturnal" ${count<6?'disabled':''}>Nearly every forest Databeast must be nocturnal.</button><button class="finding-button" data-action="finding" data-answer="biased" ${count<6?'disabled':''}>The ranger’s sample leaves out habitats and times. We need broader evidence.</button><button class="finding-button" data-action="finding" data-answer="certain" ${count<6?'disabled':''}>Our new sample proves exactly how every creature will behave.</button></div>${count<6?'<p class="save-info">Visit all three habitats in both daylight and moonlight before submitting your finding.</p>':''}<div class="modal-actions"><button class="secondary-button" data-action="hint">${q.hints>=3?'Review guided explanation':'A nudge from Inferra'}</button><button class="secondary-button" data-action="close">Back to the field</button></div>`}`,{wide:true});
 }
 
 function battleModal() {
@@ -438,7 +433,7 @@ $('modal-root').addEventListener('click',event=>{
   if (activeDialogue && !isDialogueComplete(activeDialogue) && !['dialogue-next','dialogue-back','close'].includes(a)) return;
   if (a==='dialogue-next') moveDialogue('next');
   else if (a==='dialogue-back') moveDialogue('back');
-  else if (a==='dialogue-return') openModal(modalData.returnTo);
+  else if (a==='dialogue-return') openModal(modalData.returnTo,{resumeDialogue:modalData.returnTo==='mastery'});
   else if (a==='close') closeModal();
   else if (a==='begin') { const name=$('observer-name').value.trim()||'Observer'; if (dispatch({type:'SET_NAME',name},{quiet:true})) openModal('starters'); }
   else if (a==='choose') { if(dispatch({type:'CHOOSE_STARTER',speciesId:button.dataset.id})){closeModal();chime('success');} }
@@ -459,20 +454,26 @@ $('modal-root').addEventListener('click',event=>{
     const wasComplete=quest().status==='complete';
     if (dispatch({type:'SUBMIT_FINDING',answer:button.dataset.answer},{quiet:true})) {
       if (!wasComplete && quest().status==='complete') {openModal('complete');chime('success');}
-      else openDialogue('Look again at the evidence','PROFESSOR INFERRA', '',null,{
-        speaker:'inferra',expression:'thoughtful',returnTo:'investigation',
-        segments:button.dataset.answer==='nocturnal'
-          ? ['Look at the daytime records you collected.','Can a night-only sample describe the activity of the whole forest?']
-          : ['Your observations give us useful evidence.','They do not establish certainty about every creature or future sighting.']
+      else openDialogue('Look again at the evidence','PROFESSOR INFERRA', '', 'inferra-finding-feedback',{
+        returnTo:'investigation',answer:button.dataset.answer
       });
     }
   }
   else if (a==='hint') {
-    if (dispatch({type:'REQUEST_HINT'},{quiet:true})) openDialogue('A nudge from Inferra','FIELD GUIDANCE','',null,{
-      speaker:'inferra',expression:'thoughtful',returnTo:'investigation',segments:samplingHints[Math.min(quest().hints,3)-1]
+    if (dispatch({type:'REQUEST_HINT'},{quiet:true})) openDialogue('A nudge from Inferra','FIELD GUIDANCE','','inferra-hint',{
+      returnTo:'investigation',hintLevel:quest().hints
     });
   }
-  else if (a==='master') { const before=conceptStatus('concept_sampling_bias'); if(dispatch({type:'MASTER_CONCEPT',answer:button.dataset.answer}) && conceptStatus('concept_sampling_bias')==='mastered'){openModal('dex');dexTab='knowledge';renderModal();if(before!=='mastered')chime('success');} }
+  else if (a==='master') {
+    const before=conceptStatus('concept_sampling_bias');
+    if (dispatch({type:'MASTER_CONCEPT',answer:button.dataset.answer},{quiet:true})) {
+      const mastered=conceptStatus('concept_sampling_bias')==='mastered';
+      if (mastered) {dexTab='knowledge';if(before!=='mastered')chime('success');}
+      openDialogue(mastered?'A thoughtful field researcher':'Reconsider the sampling plan','PROFESSOR INFERRA','','inferra-mastery-feedback',{
+        mastered,returnTo:mastered?'dex':'mastery',returnLabel:mastered?'Review discoveries':'Try the plan again'
+      });
+    }
+  }
   else if (a==='mastery') openModal('mastery');
   else if (a==='dex') openModal('dex');
   else if (a==='dex-tab') {dexTab=button.dataset.tab;renderModal();}

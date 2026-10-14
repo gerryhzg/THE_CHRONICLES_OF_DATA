@@ -82,6 +82,28 @@ const dialogue = () => evaluate(`(() => {
   };
 })()`);
 
+async function inferraDialogue(phase) {
+  const segment = await dialogue();
+  assert.equal(segment?.speakerId, 'inferra', `${phase} must begin with Professor Inferra`);
+  assert.equal(segment.speaker, 'Professor Inferra', `${phase} must display Inferra's name`);
+  assert.ok(segment.portrait && segment.portraitVisible && segment.portraitLabel?.includes('Professor Inferra'), `${phase} must show Inferra's accessible portrait`);
+  assert.equal(await evaluate(`document.querySelectorAll('#dialogue-line').length`), 1, `${phase} must display one dialogue segment`);
+  return segment;
+}
+
+async function noDialogueActions(names, message) {
+  for (const name of names) {
+    assert.equal(await evaluate(`!!document.querySelector('[data-action="${name}"]')`), false, message);
+  }
+}
+
+async function heldDialogueKeys(segment, message) {
+  for (const [key, code, virtualKey] of [['Enter', 'Enter', 13], [' ', 'Space', 32], ['e', 'KeyE', 69]]) {
+    await pressKey(key, code, virtualKey, true);
+    assert.deepEqual(await dialogue(), segment, message);
+  }
+}
+
 async function finishDialogue() {
   const segments = [];
   for (let i = 0; i < 30; i++) {
@@ -256,9 +278,62 @@ try {
   checks.push('Multi-speaker dialogue updates active names and portraits');
   await visit('gate');
   await visit('inferra', 'nocturnal');
+  const inferraIntro = await inferraDialogue('Inferra introduction');
+  assert.equal(inferraIntro.backEnabled, false, 'Inferra introduction must begin at its first segment');
+  await noDialogueActions(['start-investigation', 'investigation'], 'Inferra assignment must wait until all segments are read');
+  const beforeInferraIntro = await saved();
+  await screenshot('inferra-dialogue.png');
+  await screenshot('inferra-mobile.png', true);
+  assert.equal(await evaluate(`(() => {
+    const portrait = document.querySelector('.dialogue-box svg[role="img"]')?.getBoundingClientRect();
+    const line = document.querySelector('#dialogue-line')?.getBoundingClientRect();
+    return document.documentElement.scrollWidth <= 390 && !!portrait && portrait.left >= 0 && portrait.right <= 390 && !!line && line.right <= 390;
+  })()`), true, 'Inferra portrait and dialogue must fit on mobile');
+  await cdp('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1050, deviceScaleFactor: 1, mobile: false });
+  await heldDialogueKeys(inferraIntro, 'Held Enter, Space and E must not skip Inferra introduction');
+  const inferraSegments = [inferraIntro];
+  for (const [key, code, virtualKey] of [['Enter', 'Enter', 13], [' ', 'Space', 32], ['e', 'KeyE', 69]]) {
+    const before = await dialogue();
+    await pressKey(key, code, virtualKey);
+    const after = await dialogue();
+    assert.notEqual(after.line, before.line, `${code} must advance Inferra's conversation exactly once`);
+    assert.ok(after.speaker && after.portraitVisible, 'Inferra conversation must identify every active speaker');
+    await heldDialogueKeys(after, 'Repeating a key must not skip the current Inferra segment');
+    inferraSegments.push(after);
+  }
+  for (let i = 0; i < 3; i++) await action('dialogue-back');
+  assert.deepEqual(await dialogue(), inferraIntro, 'Back must restore Inferra initial name, portrait, expression and text');
+  inferraSegments.push(...await finishDialogue());
+  assert.ok(new Set(inferraSegments.filter(segment => segment.speakerId === 'inferra').map(segment => segment.expression)).size > 1, 'Inferra must use different expressions during her introduction');
+  assert.deepEqual(await saved(), beforeInferraIntro, 'Reading Inferra introduction must not start or change the investigation');
+  const inferraLastIntro = await dialogue();
+  await pressKey('e', 'KeyE', 69);
+  assert.deepEqual(await dialogue(), inferraLastIntro, 'E must stop at Inferra final segment');
+  await evaluate(`document.querySelector('[data-action="start-investigation"]').focus()`);
+  await heldDialogueKeys(inferraLastIntro, 'Held keys must not automatically accept Inferra assignment');
+  assert.equal((await saved()).quests.nocturnal.status, 'locked', 'Inferra assignment must require a deliberate player choice');
+  await action('dialogue-back');
+  await noDialogueActions(['start-investigation'], 'Back must hide Inferra assignment while reviewing an earlier segment');
   await finishDialogue();
   await action('start-investigation');
   await action('hint');
+  const inferraHint = await inferraDialogue('Inferra field guidance');
+  await noDialogueActions(['dialogue-return'], 'Inferra guidance must finish before returning to field notes');
+  await heldDialogueKeys(inferraHint, 'Held keys must not skip Inferra guidance');
+  await finishDialogue();
+  await action('dialogue-return');
+  await waitHeading('The Nocturnal Mystery');
+  assert.equal((await saved()).quests.nocturnal.status, 'active');
+  await close();
+
+  await visit('inferra', 'The Nocturnal Mystery');
+  await inferraDialogue('Inferra active investigation revisit');
+  await noDialogueActions(['investigation', 'finding'], 'Inferra active revisit must show dialogue before investigation actions');
+  await finishDialogue();
+  await action('investigation');
+  await waitHeading('The Nocturnal Mystery');
+  assert.equal(await dialogue(), null, 'Opening investigation notes must display the evidence view');
+  assert.equal((await saved()).quests.nocturnal.observations.length, 0);
   await close();
   for (const time of ['day', 'night']) {
     if ((await saved()).time !== time) { await visit('camp', 'Wait for'); await finishDialogue(); await action('change-time'); }
@@ -270,19 +345,63 @@ try {
   }
   assert.equal((await saved()).quests.nocturnal.observations.length, 6);
   await visit('inferra', 'The Nocturnal Mystery');
+  const inferraReady = await inferraDialogue('Inferra ready investigation revisit');
+  assert.equal((await saved()).quests.nocturnal.status, 'ready');
+  await noDialogueActions(['investigation', 'finding'], 'Inferra ready revisit must show dialogue before choosing findings');
+  await heldDialogueKeys(inferraReady, 'Held keys must not skip Inferra ready conversation');
+  await finishDialogue();
+  await action('investigation');
   await action('finding', '[data-answer="nocturnal"]');
   assert.equal((await saved()).quests.nocturnal.status, 'ready');
+  await inferraDialogue('Inferra incorrect finding feedback');
   await finishDialogue();
   await action('dialogue-return');
   await action('finding', '[data-answer="biased"]');
   assert.equal((await saved()).flags.compass, true);
+  await inferraDialogue('Inferra completed investigation');
   await finishDialogue();
   await action('mastery');
+  const masteryIntro = await inferraDialogue('Inferra optional mastery challenge');
+  await noDialogueActions(['master'], 'Inferra mastery choices must wait until the final segment');
+  await heldDialogueKeys(masteryIntro, 'Held keys must not skip Inferra mastery introduction');
   await finishDialogue();
+  const masteryLastLine = await dialogue();
+  assert.equal(await evaluate(`document.querySelectorAll('[data-action="master"]').length`), 3, 'Inferra mastery must offer all three plans after dialogue');
+  await evaluate(`document.querySelector('[data-action="master"][data-answer="representative"]').focus()`);
+  await heldDialogueKeys(masteryLastLine, 'Held keys must not automatically select a mastery plan');
+  assert.equal((await saved()).dex.concepts.concept_sampling_bias, 'understood', 'Mastery needs a deliberate answer');
+  await action('master', '[data-answer="night"]');
+  const masteryFeedback = await inferraDialogue('Inferra incorrect mastery feedback');
+  assert.equal(masteryFeedback.expression, 'thoughtful', 'Incorrect mastery feedback must show Inferra thoughtful expression');
+  await noDialogueActions(['dialogue-return', 'master'], 'Inferra mastery feedback must finish before returning to the challenge');
+  await finishDialogue();
+  await action('dialogue-return');
+  await waitHeading('Plan the next expedition');
+  assert.deepEqual(await dialogue(), masteryLastLine, 'Returning from feedback must preserve the final mastery introduction segment');
+  assert.equal(await evaluate(`document.querySelectorAll('[data-action="master"]').length`), 3, 'Returning from feedback must immediately restore the mastery choices');
   await action('master', '[data-answer="representative"]');
   assert.equal((await saved()).dex.concepts.concept_sampling_bias, 'mastered');
+  const masterySuccess = await inferraDialogue('Inferra mastery success feedback');
+  assert.equal(masterySuccess.expression, 'happy', 'Successful mastery feedback must show Inferra happy expression');
+  await noDialogueActions(['dialogue-return'], 'Mastery success dialogue must finish before reviewing discoveries');
+  await finishDialogue();
+  await action('dialogue-return');
+  await waitHeading('The DataDex');
+  assert.equal(await evaluate(`document.querySelector('[data-action="dex-tab"][data-tab="knowledge"]').classList.contains('active')`), true, 'Mastery success must return to DataDex discoveries');
   await close();
-  checks.push('All six habitat/time observations, hint, revised conclusion, Sampling Compass, optional mastery');
+
+  await visit('inferra', 'A fuller picture of the forest');
+  const completedInferra = await inferraDialogue('Inferra completed investigation revisit');
+  await noDialogueActions(['investigation', 'mastery', 'dex'], 'Inferra completed revisit must finish before offering followup choices');
+  await heldDialogueKeys(completedInferra, 'Held keys must not skip Inferra completed conversation');
+  await finishDialogue();
+  assert.equal(await evaluate(`!!document.querySelector('[data-action="investigation"]')`), true, 'Completed Inferra visit must offer the investigation notes');
+  await action('investigation');
+  await waitHeading('The Nocturnal Mystery');
+  assert.equal((await saved()).quests.nocturnal.status, 'complete');
+  await close();
+  checks.push('Inferra portraits and expressions, initial/active/ready/completed NPC conversations, Next/Back and Enter/Space/E, mobile fit, held-key and gated-action safety');
+  checks.push('All six habitat/time observations, portrait guidance and revised conclusion, Sampling Compass, wrong mastery feedback retry, mastery success and DataDex discoveries');
 
   await visit('voltkit', 'A spark in');
   await finishDialogue();
@@ -344,7 +463,7 @@ try {
   checks.push('Sanctuary healing/restocking, DataDex field notes, export/new journey/import, final reload');
   await screenshot('completed.png');
   assert.deepEqual(errors, [], 'Browser runtime must have no errors');
-  await writeFile(resolve(artifactDir, 'browser-smoke.json'), JSON.stringify({ status: 'passed', url, checks, errors, screenshots: ['dialogue.png', 'dialogue-mobile.png', 'prototype.png', 'mobile.png', 'completed.png'] }, null, 2));
+  await writeFile(resolve(artifactDir, 'browser-smoke.json'), JSON.stringify({ status: 'passed', url, checks, errors, screenshots: ['dialogue.png', 'dialogue-mobile.png', 'inferra-dialogue.png', 'inferra-mobile.png', 'prototype.png', 'mobile.png', 'completed.png'] }, null, 2));
   console.log(JSON.stringify({ status: 'passed', checks, errors }, null, 2));
 } catch (error) {
   errors.push(error.stack || error.message);

@@ -29,6 +29,8 @@ Touch controls appear on small screens. Battles use buttons and pause movement. 
 
 Story conversations show one dialogue segment at a time alongside the speaker's name, role, and portrait. Click **Next**, or press **Enter**, **Space**, or **E** to advance. **Back** revisits the previous segment; Tab and Enter also operate the Back button. Holding a key does not skip lines or automatically select a newly revealed choice. Expressions change with the conversation, and gameplay options appear on its final segment. Escape closes the conversation; reopening starts from its first segment. Character portraits include Lyra, Kai, Inferra, Rowan, the ranger, the player, and the DataDex.
 
+Every visit to Professor Inferra opens her portrait conversation, including return visits during fieldwork, evidence review, and after the investigation. Her dialogue reflects your observation count and discoveries. Hints, finding corrections, and mastery feedback use the same controls; a retry returns to the sampling choices after you finish her feedback.
+
 ## Complete Stage 1 walkthrough
 
 1. Begin your journey and choose **Statifox**, **Algobear**, or **Terradeer**. If you choose to explore first, visit Lyra’s Lab to choose your companion. Every starter can complete the prototype.

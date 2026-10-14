@@ -56,8 +56,26 @@ export function getConversation(id, context = {}) {
         line('lyra', 'concerned', 'One failed forecast does not tell us everything about the Oracle.'),
         line('lyra', 'thoughtful', 'It does give us a reason to investigate the evidence behind it.'),
       ], 'Review the rainfall records');
-    case 'inferra':
+    case 'inferra': {
+      const count = Number.isInteger(context.observationCount) ? Math.min(6, Math.max(0, context.observationCount)) : 0;
+      if (context.questStatus === 'active') return conversation('A broader view of the forest', 'FOREST FIELD STATION', [
+        line('inferra', 'happy', `Welcome back, ${player}; your DataDex holds ${count} of the six field observations.`),
+        line('inferra', 'thoughtful', 'Observe the meadow, riverbank, and canopy in both daylight and moonlight to include the habitats and times the ranger missed.'),
+        line('inferra', 'neutral', 'Rest at the campfire to change the time, then bring me all six records so we can examine his claim together.'),
+      ], 'Review your field observations');
+      if (context.questStatus === 'ready') return conversation('What does the evidence support?', 'FOREST FIELD STATION', [
+        line('inferra', 'happy', `You have recorded all six habitat and time combinations, ${player}.`),
+        line('inferra', 'thoughtful', 'Compare your daytime and nighttime records with the ranger\'s canopy-only sample.'),
+        line('inferra', 'thoughtful', 'Does his sample support a claim about nearly every forest Databeast, and what uncertainty remains in ours?'),
+      ], 'Examine the evidence');
+      if (context.questStatus === 'complete') return conversation('Keep asking good questions', 'FOREST FIELD STATION', [
+        line('inferra', 'happy', `Good to see you, ${player}; you earned the Sampling Compass by questioning which observations were missing.`),
+        line('inferra', 'thoughtful', 'Your broader sample challenged the ranger\'s claim, but it cannot prove how every creature will behave.'),
+        line('inferra', 'neutral', 'Keep recording habitats and times, and leave room to revise your conclusions when new evidence arrives.'),
+        ...(context.mastered ? [line('inferra', 'happy', 'Your DataDex also records your mastery of planning observations across the relevant habitats and times.')] : []),
+      ], 'Review your investigation');
       return conversation('Is the whole forest nocturnal?', 'FOREST FIELD STATION', [
+        line('inferra', 'happy', `Welcome to the field station, ${player}; a ranger has brought us a claim to investigate.`),
         line('ranger', 'happy', 'Nearly every Databeast in this forest must be nocturnal!'),
         line('ranger', 'neutral', 'I counted 18 Bayowl and 12 Samplet in the canopy, all at night.'),
         line('inferra', 'thoughtful', 'Those are real observations, but they cover only one habitat at one time of day.'),
@@ -66,6 +84,33 @@ export function getConversation(id, context = {}) {
         line('inferra', 'neutral', 'Rest at the campfire to change the time, and record each visit in your DataDex.'),
         line('inferra', 'thoughtful', 'Bring me those six observations so we can compare the claim with a broader sample.'),
       ], 'Review the field assignment');
+    }
+    case 'inferra-hint': {
+      const level = Number.isFinite(context.hintLevel) ? Math.min(3, Math.max(1, Math.floor(context.hintLevel))) : 1;
+      const hints = [
+        ['The ranger visits only the canopy, and only at night.', 'Which habitats and times are missing from his notebook?'],
+        ['Compare the same habitat in daylight and moonlight, then compare habitats.', 'Does one place at one time represent all of them?'],
+        ['A night-only sample favors the creatures visible at night.', 'It cannot establish that nearly every creature in the forest is nocturnal.'],
+      ];
+      return conversation('A nudge from Inferra', 'FIELD RESEARCH GUIDANCE', hints[level - 1].map(text => line('inferra', 'thoughtful', text)), 'Return to the evidence');
+    }
+    case 'inferra-finding-feedback':
+      return conversation('Take another look', 'FIELD RESEARCH FEEDBACK', (context.answer === 'nocturnal' ? [
+        'Look at your daytime records and consider what the ranger\'s night-only sample leaves out.',
+        'Does that narrow sample describe the whole forest, or should you revise your finding?',
+      ] : [
+        'Your observations give us useful evidence about these habitats and times.',
+        'They do not establish certainty about every creature or future sighting, so reconsider what your finding claims.',
+      ]).map(text => line('inferra', 'thoughtful', text)), 'Revisit your finding');
+    case 'inferra-mastery-feedback':
+      return conversation(context.mastered ? 'A thoughtful research plan' : 'Reconsider the sampling plan', 'OPTIONAL FIELD CHALLENGE', context.mastered ? [
+        line('inferra', 'happy', 'Well planned; observing several habitats at different times includes groups a night-only sample would miss.'),
+        line('inferra', 'happy', 'Use a consistent method in each habitat so the observations can be compared fairly.'),
+        line('inferra', 'happy', 'Your DataDex now records your sampling mastery, and future evidence can still teach us more.'),
+      ] : [
+        line('inferra', 'thoughtful', 'A larger sample does not fix sampling bias if it still leaves out important habitats or times.'),
+        line('inferra', 'thoughtful', 'Try a plan that includes the relevant habitats in daylight and moonlight, using a consistent observation method.'),
+      ], context.mastered ? 'Review your DataDex' : 'Try the plan again');
     case 'complete':
       return conversation('The Nocturnal Mystery, solved', 'FOREST FIELD STATION', [
         line('inferra', 'thoughtful', 'The ranger was studying the creatures he could see in the canopy at night.'),
