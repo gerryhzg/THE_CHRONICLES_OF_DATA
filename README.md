@@ -94,6 +94,16 @@ Story conversations show one dialogue segment at a time alongside the speaker's 
 
 Every visit to Professor Inferra opens her portrait conversation, including return visits during fieldwork, evidence review, and after the investigation. Her dialogue reflects your observation count and discoveries. Hints, finding corrections, and mastery feedback use the same controls; a retry returns to the sampling choices after you finish her feedback.
 
+### Spoken dialogue
+
+Click **Enable voice** in a conversation, or **Voices off** in the footer, to turn on spoken dialogue. Voices start off, and your choice is remembered in this browser separately from your game save and sound effects.
+
+- Only the displayed segment is read aloud. Characters have their own voice, pace, and pitch settings.
+- **Replay** reads the current line again. **Skip voice** stops its audio and leaves the text in place.
+- **Next**, **Back**, and the usual dialogue keys work immediately. Moving to another segment or closing the conversation stops the previous audio; playback never advances dialogue automatically.
+
+Speech uses the [browser's built-in speech synthesis](https://developer.mozilla.org/en-US/docs/Web/API/SpeechSynthesis). Available voices vary by browser and device. The game uses distinct English voices where available and falls back to the default voice with character-specific pace and pitch. If speech is unavailable or fails, all text and game controls still work; **Replay** can retry a failed line. Hiding the game stops the current voice; return and press **Replay** to hear it again.
+
 ## Complete Stage 1 walkthrough
 
 1. Begin your journey and choose **Statifox**, **Algobear**, or **Terradeer**. If you choose to explore first, visit Lyra’s Lab to choose your companion. Every starter can complete the prototype.
@@ -131,8 +141,8 @@ With the local server running and Microsoft Edge installed, an optional browser 
 node scripts/browser-smoke.mjs
 ```
 
-It writes screenshots and a verification report under `artifacts/`. This README describes the checks available; consult their actual output for results.
+It writes screenshots and a verification report under `artifacts/`. Speech checks use a mock browser audio API to verify text synchronization, interruptions, controls, and unavailable-browser behavior; they do not verify audible output or voice quality. This README describes the checks available; consult their actual output for results.
 
-The game is buildless HTML, CSS, and JavaScript. `dist/engine.js` contains serializable rules and save validation; `dist/world.js` contains maps and programmatically drawn pixel artwork; `dist/app.js` connects exploration, combat, investigation, and browser storage. `dist/dialogue.js` stores segmented conversations and navigation, while `dist/portraits.js` renders character portraits and expressions as accessible inline SVG. `scripts/serve.mjs` serves the playable `dist/` folder. For dialogue contributions, see the [character voice guide](docs/character-voices.md).
+The game is buildless HTML, CSS, and JavaScript. `dist/engine.js` contains serializable rules and save validation; `dist/world.js` contains maps and programmatically drawn pixel artwork; `dist/app.js` connects exploration, combat, investigation, and browser storage. `dist/dialogue.js` stores segmented conversations and navigation, while `dist/portraits.js` renders character portraits and expressions as accessible inline SVG. `dist/speech.js` manages optional spoken dialogue, character delivery, and the voice preference. `scripts/serve.mjs` serves the playable `dist/` folder. For dialogue contributions, see the [character voice guide](docs/character-voices.md).
 
 This is **Stage 1**, not the full Chapter One: later regions, the remaining quests and roster, evolutions, the Oracle finale, and a full chapter expansion framework remain future work. The pixel scenery and creature illustrations are original code-native prototype artwork.

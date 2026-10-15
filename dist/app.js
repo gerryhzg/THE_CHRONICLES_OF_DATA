@@ -2,6 +2,7 @@ import { SPECIES, HABITATS, createGame, act, saveGame, loadGame, serializeGame, 
 import { MAPS, isWalkable, renderWorld, drawCreature } from './world.js';
 import { getConversation, createDialogue, currentSegment, advanceDialogue, previousDialogue, isDialogueComplete } from './dialogue.js';
 import { resolveSpeaker, portraitMarkup } from './portraits.js';
+import { createSpeechController } from './speech.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -35,6 +36,10 @@ let dexTab = 'creatures';
 let sound = false;
 let audioContext;
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+let synthesis = null;
+let Utterance = null;
+try { synthesis = window.speechSynthesis; Utterance = window.SpeechSynthesisUtterance; } catch {}
+const speech = createSpeechController({synthesis, Utterance, storage, onChange:updateSpeechControls});
 const speciesEntries = () => Object.entries(SPECIES);
 const habitats = () => Array.isArray(HABITATS) ? HABITATS : Object.values(HABITATS);
 const creatureName = (id) => SPECIES[id]?.name || id?.replace('creature_', '') || 'Databeast';
@@ -50,6 +55,45 @@ function toast(message) {
   $('toast').hidden = false;
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { $('toast').hidden = true; }, 4500);
+}
+
+function updateSpeechControls() {
+  const {supported, enabled, status} = speech.getState();
+  const footer = $('speech-toggle-button');
+  footer.disabled = !supported;
+  footer.textContent = supported ? (enabled ? 'Voices on' : 'Voices off') : 'Voices unavailable';
+  footer.setAttribute('aria-pressed', String(enabled));
+  footer.setAttribute('aria-label', supported ? (enabled ? 'Disable spoken dialogue' : 'Enable spoken dialogue') : 'Spoken dialogue unavailable in this browser');
+  const toggle = $('modal-root').querySelector('[data-action="speech-toggle"]');
+  if (toggle) {
+    toggle.disabled = !supported;
+    toggle.textContent = enabled ? 'Mute voice' : 'Enable voice';
+    toggle.setAttribute('aria-pressed', String(enabled));
+  }
+  const replay = $('modal-root').querySelector('[data-action="speech-replay"]');
+  const skip = $('modal-root').querySelector('[data-action="speech-skip"]');
+  if (replay) replay.disabled = !supported || !enabled || !activeDialogue;
+  if (skip) {
+    skip.disabled = !supported || !enabled;
+    skip.setAttribute('aria-disabled', String(!supported || !enabled || status !== 'speaking'));
+  }
+  const speakerName = activeDialogue ? resolveSpeaker(currentSegment(activeDialogue).speaker, state.player.name).name : '';
+  const messages = {
+    off:'Off · read at your own pace', idle:'Ready for the next line',
+    speaking:'Speaking · '+speakerName, finished:'Line finished · advance when ready',
+    skipped:'Voice skipped · advance when ready', unavailable:'Voice playback unavailable in this browser',
+    error:'Voice could not play · try Replay',
+  };
+  if ($('speech-status')) {
+    $('speech-status').setAttribute('aria-live', enabled && supported && status !== 'error' ? 'off' : 'polite');
+    $('speech-status').textContent = messages[status] || messages.off;
+  }
+  // Screen readers keep their usual dialogue announcements when game voices are off.
+  $('dialogue-announcer').setAttribute('aria-live', enabled && supported ? 'off' : 'polite');
+}
+
+function speechControlsMarkup() {
+  return `<div class="dialogue-speech" role="group" aria-label="Spoken dialogue"><div class="speech-summary"><span>Spoken dialogue</span><small id="speech-status" role="status"></small></div><div class="speech-buttons"><button class="secondary-button small-button" data-action="speech-toggle" aria-pressed="false">Enable voice</button><button class="secondary-button small-button" data-action="speech-replay" aria-label="Replay voice for the displayed dialogue">Replay</button><button class="secondary-button small-button" data-action="speech-skip" aria-label="Skip voice for this line without advancing dialogue">Skip voice</button></div></div>`;
 }
 
 function chime(kind = 'action') {
@@ -242,6 +286,7 @@ function closeModal() {
     if (modal !== 'battle') { openModal('battle'); return; }
     toast('Finish this encounter, or flee from a wild battle.'); return;
   }
+  speech.sync(null);
   modal=null; modalData={}; activeDialogue=null; $('modal-root').innerHTML=''; $('dialogue-announcer').textContent=''; updatePrompt();
   if (returnFocus?.isConnected) returnFocus.focus({preventScroll:true}); else $('world').focus({preventScroll:true});
 }
@@ -285,6 +330,7 @@ function dialogueMarkup() {
     <div class="speaker-portrait">${portraitMarkup(speaker.id,expression,state.player.name)}</div>
     <div class="dialogue-copy"><div class="speaker-heading"><h3 id="dialogue-speaker">${esc(speaker.name)}</h3><span>${esc(speaker.role)}</span></div><p id="dialogue-line">${esc(segment.text)}</p></div>
     <div class="dialogue-controls"><div class="dialogue-position"><span>${index+1} <i>/</i> ${conversation.segments.length}</span><small>${complete?'Choose an option below':'Enter · Space · E to advance'}</small></div><div class="dialogue-buttons"><button class="secondary-button small-button" data-action="dialogue-back" aria-label="Previous dialogue segment" ${index===0?'disabled':''}>← Back</button><button class="primary-button small-button" data-action="dialogue-next" aria-label="Next dialogue segment" ${complete?'disabled':''}>${complete?'All read ✓':'Next →'}</button></div></div>
+    ${speechControlsMarkup()}
   </section>`;
 }
 
@@ -366,6 +412,8 @@ function renderModal({resetFocus=false} = {}) {
     html=modalShell('Your first field guide','THE CHRONICLES OF DATA · STAGE 1',`<p>Explore a small original RPG world, form a team, and uncover a misleading claim by collecting evidence. You can complete the investigation with any starter.</p><table class="control-table"><tr><td>Walk</td><td>WASD / arrow keys / click map</td></tr><tr><td>Talk, observe, or enter</td><td>E / Space / click a place</td></tr><tr><td>Open DataDex</td><td>X</td></tr><tr><td>Save & load</td><td>P</td></tr><tr><td>Close a dialog</td><td>Escape</td></tr></table><p>Choose a companion in Lyra’s lab, battle Kai, then enter the forest from the eastern gate. Speak to Inferra and observe each habitat by day and night. Rest at the campfire to change time.</p><p>Visit the sanctuary for free healing and supplies. Battles are turn based: scan, attack, guard, switch, use a potion, or bond with a weakened wild creature.</p><div class="evidence-note">This prototype includes one village, one route, three starters, Kai’s battle, Voltkit recruitment, and one complete investigation. Later chapter regions and evolutions belong to future stages.</div><div class="modal-actions"><button class="primary-button" data-action="close">Back to the adventure</button><button class="secondary-button" data-action="places">Places to visit</button></div>`);
   }
   $('modal-root').innerHTML=html;
+  speech.sync(activeDialogue ? currentSegment(activeDialogue) : null);
+  updateSpeechControls();
   paintPortraits($('modal-root'));
   const root=$('modal-root');
   let focusable;
@@ -430,8 +478,11 @@ function exportSave() {
 $('modal-root').addEventListener('click',event=>{
   const button=event.target.closest('button[data-action]'); if (!button || button.disabled) return;
   const a=button.dataset.action;
-  if (activeDialogue && !isDialogueComplete(activeDialogue) && !['dialogue-next','dialogue-back','close'].includes(a)) return;
-  if (a==='dialogue-next') moveDialogue('next');
+  if (activeDialogue && !isDialogueComplete(activeDialogue) && !['dialogue-next','dialogue-back','close','speech-toggle','speech-replay','speech-skip'].includes(a)) return;
+  if (a==='speech-toggle') speech.setEnabled(!speech.getState().enabled);
+  else if (a==='speech-replay') speech.replay();
+  else if (a==='speech-skip') {if (speech.getState().status === 'speaking') speech.skip();}
+  else if (a==='dialogue-next') moveDialogue('next');
   else if (a==='dialogue-back') moveDialogue('back');
   else if (a==='dialogue-return') openModal(modalData.returnTo,{resumeDialogue:modalData.returnTo==='mastery'});
   else if (a==='close') closeModal();
@@ -559,6 +610,9 @@ $('time-button').addEventListener('click',()=>{
 });
 document.querySelectorAll('[data-walk]').forEach(button=>button.addEventListener('click',()=>{path=[];pathTarget=null;step(button.dataset.walk);}));
 $('sound-button').addEventListener('click',()=>{sound=!sound;$('sound-button').textContent=sound?'♪ Sound on':'♪ Sound off';$('sound-button').setAttribute('aria-pressed',String(sound));chime('success');});
+$('speech-toggle-button').addEventListener('click',()=>speech.setEnabled(!speech.getState().enabled));
+document.addEventListener('visibilitychange',()=>{if(document.hidden) speech.skip();});
+window.addEventListener('pagehide',()=>speech.skip());
 
 function frame(now){
   if(!document.hidden&&now-lastDraw>(reducedMotion?250:70)){
@@ -568,6 +622,7 @@ function frame(now){
   requestAnimationFrame(frame);
 }
 
+updateSpeechControls();
 updateUI();
 if(state.battle)openModal('battle');
 else if(!state.starter&&!resumed)openModal('welcome');

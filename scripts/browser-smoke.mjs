@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { SPEECH_PREFERENCE_KEY } from '../dist/speech.js';
 
 const url = process.env.CHRONICLES_TEST_URL || 'http://127.0.0.1:4173';
 const artifactDir = resolve(import.meta.dirname, '../artifacts');
@@ -144,6 +145,109 @@ async function screenshot(name, mobile = false) {
   console.log(`Screenshot: artifacts/${name}`);
 }
 
+async function checkSpokenDialogue() {
+  // Headless machines may have no audio device. Mock the browser speech API so
+  // this checks real UI synchronization deterministically, not audible output.
+  const mock = await cdp('Page.addScriptToEvaluateOnNewDocument', { source: `(() => {
+    const voices = ['English One', 'English Two', 'English Three', 'English Four', 'English Five', 'English Six', 'English Seven'].map((name, index) => ({ name, lang: 'en-US', default: index === 0, voiceURI: name }));
+    const listeners = new Map();
+    const test = window.__speechTest = { spoken: [], cancelCount: 0, voices };
+    class Utterance { constructor(text) { this.text = text; } }
+    const synthesis = {
+      getVoices() { return test.voices; },
+      addEventListener(name, callback) { listeners.set(name, callback); },
+      removeEventListener(name, callback) { if (listeners.get(name) === callback) listeners.delete(name); },
+      cancel() { test.cancelCount++; },
+      speak(utterance) {
+        test.spoken.push({ utterance, end: utterance.onend, error: utterance.onerror });
+        utterance.onstart?.();
+      },
+    };
+    test.voicesChanged = () => listeners.get('voiceschanged')?.();
+    test.snapshot = () => ({ count: test.spoken.length, canceled: test.cancelCount, text: test.spoken.at(-1)?.utterance.text, voice: test.spoken.at(-1)?.utterance.voice?.name, rate: test.spoken.at(-1)?.utterance.rate, pitch: test.spoken.at(-1)?.utterance.pitch });
+    Object.defineProperty(window, 'SpeechSynthesisUtterance', { configurable: true, value: Utterance });
+    Object.defineProperty(window, 'speechSynthesis', { configurable: true, value: synthesis });
+  })()` });
+  let unsupported;
+  const speech = () => evaluate('window.__speechTest.snapshot()');
+  try {
+    await cdp('Page.navigate', { url });
+    await waitHeading('Every adventure');
+    await action('begin');
+    const first = await dialogue();
+    assert.equal((await speech()).count, 0, 'Spoken dialogue must be off until the player enables it');
+    assert.equal(await evaluate(`document.querySelector('#speech-toggle-button').getAttribute('aria-pressed')`), 'false');
+    await action('speech-toggle');
+    const firstSpeech = await speech();
+    assert.equal(firstSpeech.count, 1);
+    assert.equal(firstSpeech.text, first.line, 'Speech must use exactly the visible dialogue text');
+    assert.ok(firstSpeech.voice, 'An available installed voice must be assigned');
+    const gameBeforeSpeech = await saved();
+    await evaluate(`window.__originalDialogueBox = document.querySelector('.dialogue-box'); document.querySelector('[data-action="speech-skip"]').focus()`);
+    await action('speech-skip');
+    assert.ok((await speech()).canceled > firstSpeech.canceled, 'Skip voice must stop speech');
+    assert.deepEqual(await dialogue(), first, 'Skipping voice must not advance or close the visible segment');
+    assert.equal(await evaluate(`document.querySelector('.dialogue-box') === window.__originalDialogueBox`), true, 'Speech controls must not rebuild the conversation');
+    assert.equal(await evaluate(`document.activeElement?.dataset.action`), 'speech-skip', 'Playback state changes must preserve keyboard focus');
+    await evaluate(`window.__speechTest.spoken[0].end?.(); window.__speechTest.voicesChanged()`);
+    assert.equal((await speech()).count, 1, 'Late events and voice discovery must not replay a skipped line');
+    assert.deepEqual(await saved(), gameBeforeSpeech, 'Speech controls must not modify game progression');
+    await action('speech-replay');
+    assert.equal((await speech()).count, 2);
+    assert.equal((await speech()).text, first.line);
+    const beforeNext = await speech();
+    await action('dialogue-next');
+    const second = await dialogue();
+    const secondSpeech = await speech();
+    assert.equal(secondSpeech.count, beforeNext.count + 1);
+    assert.ok(secondSpeech.canceled > beforeNext.canceled, 'Next must interrupt the prior reading');
+    assert.equal(secondSpeech.text, second.line);
+    assert.notEqual(second.speakerId, first.speakerId, 'This check needs a speaker change');
+    assert.notEqual(secondSpeech.voice, firstSpeech.voice, 'Different speakers must use different available voices');
+    assert.notDeepEqual([secondSpeech.rate, secondSpeech.pitch], [firstSpeech.rate, firstSpeech.pitch], 'Character delivery must also distinguish speakers');
+    await evaluate(`window.__speechTest.spoken[1].end?.(); window.__speechTest.spoken[1].error?.({ error: 'interrupted' })`);
+    assert.equal(await evaluate(`document.querySelector('[data-action="speech-skip"]').getAttribute('aria-disabled')`), 'false', 'A stale callback must not stop the current speaker');
+    await evaluate(`window.__speechTest.spoken.at(-1).end?.()`);
+    assert.deepEqual(await dialogue(), second, 'Finishing speech must not advance dialogue');
+    assert.equal((await speech()).count, secondSpeech.count);
+    await action('dialogue-back');
+    assert.equal((await speech()).text, first.line, 'Back must speak the segment being reviewed');
+    await action('speech-toggle');
+    const muted = await speech();
+    assert.equal(await evaluate(`localStorage.getItem(${JSON.stringify(SPEECH_PREFERENCE_KEY)})`), 'false');
+    await action('dialogue-next');
+    assert.equal((await speech()).count, muted.count, 'Muting voice must allow progression without speaking');
+    await action('speech-toggle');
+    assert.equal((await speech()).text, (await dialogue()).line, 'Enabling voice midway must read the currently displayed line');
+    const beforeClose = await speech();
+    await pressKey('Escape', 'Escape', 27);
+    assert.ok((await speech()).canceled > beforeClose.canceled, 'Closing a conversation must cancel speech');
+    assert.equal(await dialogue(), null);
+    await cdp('Page.reload');
+    await eventually(() => evaluate(`document.querySelector('#speech-toggle-button')?.getAttribute('aria-pressed') === 'true'`), 'Voice preference must survive reload');
+    assert.equal((await speech()).count, 0, 'Reloading without dialogue must not speak old content');
+    await click('#speech-toggle-button');
+    await cdp('Page.reload');
+    await eventually(() => evaluate(`document.querySelector('#speech-toggle-button')?.getAttribute('aria-pressed') === 'false'`), 'Disabled voice preference must survive reload');
+    await cdp('Page.removeScriptToEvaluateOnNewDocument', { identifier: mock.identifier });
+    unsupported = await cdp('Page.addScriptToEvaluateOnNewDocument', { source: `Object.defineProperty(window, 'SpeechSynthesisUtterance', { configurable: true, value: undefined }); Object.defineProperty(window, 'speechSynthesis', { configurable: true, value: undefined });` });
+    await evaluate(`localStorage.removeItem(${JSON.stringify(saveKey)}); localStorage.setItem(${JSON.stringify(SPEECH_PREFERENCE_KEY)}, 'true')`);
+    await cdp('Page.reload');
+    await waitHeading('Every adventure');
+    await action('begin');
+    const unavailableFirst = await dialogue();
+    assert.equal(await evaluate(`document.querySelector('#speech-toggle-button').disabled`), true, 'An unsupported browser must clearly disable speech controls');
+    assert.ok(await evaluate(`document.querySelector('#speech-status')?.textContent.trim()`), 'Unavailable speech needs a readable explanation');
+    await action('dialogue-next');
+    assert.notEqual((await dialogue()).line, unavailableFirst.line, 'Unsupported speech must not block normal dialogue progression');
+    checks.push('Optional spoken dialogue: exact visible text, character voices, Next/Back interruption, skip/replay/mute, stale callbacks, focus preservation, reload preferences and unsupported-browser progression (mock API; no audible-output claim)');
+  } finally {
+    if (unsupported) await cdp('Page.removeScriptToEvaluateOnNewDocument', { identifier: unsupported.identifier });
+    else await cdp('Page.removeScriptToEvaluateOnNewDocument', { identifier: mock.identifier });
+    await evaluate('localStorage.clear()');
+  }
+}
+
 try {
   browser = spawn(executable, ['--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check', '--disable-gpu', '--disable-background-timer-throttling', '--disable-renderer-backgrounding', 'about:blank'], { windowsHide: true, stdio: 'ignore' });
   browser.on('error', error => errors.push(`Browser launch: ${error.message}`));
@@ -166,6 +270,7 @@ try {
   await cdp('Page.enable');
   await cdp('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: downloadDir }, null);
   await cdp('Page.setInterceptFileChooserDialog', { enabled: true });
+  await checkSpokenDialogue();
   await cdp('Page.navigate', { url });
   await waitHeading('Every adventure');
   await evaluate(`document.querySelector('#observer-name').value = 'Smoke Observer'`);
