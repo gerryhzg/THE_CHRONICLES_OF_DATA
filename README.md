@@ -2,6 +2,69 @@
 
 A browser-playable prototype based on **Chapter One: The Awakening of Data — The False Forecast**. It includes Harvest Village, one wilderness route in Twin Scholars’ Forest, three starter Databeasts, turn-based combat, Voltkit recruitment, and the complete **Nocturnal Mystery** sampling investigation. DataDex tracking and save/load are part of the core game.
 
+## Collaboration basics
+
+Install Git and accept the repository invitation first. Replace `my-feature` with your own branch name.
+
+**1. Clone the project (once)**
+
+```text
+git clone https://github.com/gerryhzg/THE_CHRONICLES_OF_DATA.git
+cd THE_CHRONICLES_OF_DATA
+```
+
+Run the remaining commands inside this folder.
+
+**2. Create your branch from the latest main**
+
+```text
+git switch main
+git pull --ff-only origin main
+git switch -c my-feature
+```
+
+To return to an existing branch, use `git switch my-feature`.
+
+**3. Save your changes as a commit**
+
+```text
+git status
+git add .
+git commit -m "Describe your changes"
+```
+
+Review the files listed by `git status` before adding them.
+
+**4. Pull from main before every push**
+
+Commit your work first, then pull the latest `main` into your branch:
+
+```text
+git switch my-feature
+git pull --no-rebase --no-edit origin main
+```
+
+This merges GitHub's `main` into your current branch. If Git reports conflicts, resolve them, stage the resolved files, and commit the merge before pushing. Ask a teammate if you need help.
+
+**5. Push your branch to GitHub**
+
+```text
+git push -u origin my-feature
+```
+
+For later commits on that branch, pull from `main` again before pushing:
+
+```text
+git pull --no-rebase --no-edit origin main
+git push
+```
+
+**6. Open a pull request**
+
+On [GitHub](https://github.com/gerryhzg/THE_CHRONICLES_OF_DATA), select **Pull requests**, then **New pull request**. Choose **base: main** and **compare: my-feature**, add a title and description, then click **Create pull request**.
+
+To update your pull request, commit your changes, repeat step 4, then push to the same branch. After it is merged, repeat step 2 with a new branch name for your next task.
+
 ## Run locally
 
 Install Node.js 22 or later, then run from this folder:
@@ -56,7 +119,7 @@ The save format is versioned (`schemaVersion: 1`) and uses stable species, habit
 ## Development and verification
 
 ```powershell
-npm.cmd check
+npm.cmd run check
 npm.cmd test
 ```
 
