@@ -259,7 +259,7 @@ function prepareDialogue(type, data = {}) {
     const conversation=getConversation(type,context);
     if (type==='mastery' && conceptStatus('concept_sampling_bias')==='mastered') {
       conversation.title='A thoughtful field researcher';
-      conversation.segments=[{speaker:'inferra',expression:'happy',text:'Your DataDex records your mastery: observe several habitats at different times, using a consistent method.'}];
+      conversation.segments=[{speaker:'inferra',expression:'happy',text:'You earned that mastery mark. Keep asking who your notes leave out.'}];
     }
     return createDialogue(conversation);
   }
@@ -347,7 +347,7 @@ function renderModal({resetFocus=false} = {}) {
   const previousId=previousControl?.dataset.id;
   let html='';
   if (modal === 'welcome') {
-    html=modalShell('Every adventure begins with a question.','WELCOME, OBSERVER',`<div class="welcome-art"><span class="diamond">✧</span>${portrait('creature_statifox')}${portrait('creature_algobear')}${portrait('creature_terradeer')}</div><div class="forecast-strip"><div><span>ORACLE FORECAST · DAY 127</span><strong>0 mm</strong></div><div><span>ACTUAL RAINFALL</span><strong class="rain">46 mm</strong></div><div><span>ARCHIVE STATUS</span><strong style="font-size:17px">“Perfect.”</strong></div></div><p>The fields of Harvest Village are soaked. The Grand Archive insists no rain has fallen. Professor Lyra needs an Observer willing to trust what they can see.</p><label class="name-label" for="observer-name">What should we call you?</label><input id="observer-name" class="text-input" autocomplete="nickname" maxlength="24" value="Observer" placeholder="Your name"><div class="modal-actions"><button class="primary-button" data-action="begin">Begin your journey <span>→</span></button><button class="secondary-button" data-action="close">Explore the village</button></div><p class="save-info">A short, complete prototype adventure. Progress saves in this browser after every action.</p>`);
+    html=modalShell('Every adventure begins with a question.','WELCOME, OBSERVER',`<div class="welcome-art"><span class="diamond">✧</span>${portrait('creature_statifox')}${portrait('creature_algobear')}${portrait('creature_terradeer')}</div><div class="forecast-strip"><div><span>ORACLE FORECAST · DAY 127</span><strong>0 mm</strong></div><div><span>ACTUAL RAINFALL</span><strong class="rain">46 mm</strong></div><div><span>ARCHIVE STATUS</span><strong style="font-size:17px">“Perfect.”</strong></div></div><p>The Oracle promised dry skies. Rain drums on Harvest Village's roofs. In her lab, Professor Lyra weighs a perfect forecast against a very wet notebook.</p><label class="name-label" for="observer-name">What should we call you?</label><input id="observer-name" class="text-input" autocomplete="nickname" maxlength="24" value="Observer" placeholder="Your name"><div class="modal-actions"><button class="primary-button" data-action="begin">Begin your journey <span>→</span></button><button class="secondary-button" data-action="close">Explore the village</button></div><p class="save-info">A short, complete prototype adventure. Progress saves in this browser after every action.</p>`);
   } else if (activeDialogue) {
     html=conversationModal();
   } else if (modal === 'habitat') {
