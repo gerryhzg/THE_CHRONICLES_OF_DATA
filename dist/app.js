@@ -3,6 +3,7 @@ import { MAPS, isWalkable, renderWorld, drawCreature } from './world.js';
 import { getConversation, createDialogue, currentSegment, advanceDialogue, previousDialogue, isDialogueComplete } from './dialogue.js';
 import { resolveSpeaker, portraitMarkup } from './portraits.js';
 import { createSpeechController } from './speech.js';
+import { getQuestGuide, getJourneySteps, getMissingObservations } from './quests.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -149,13 +150,21 @@ function dispatch(action, {quiet = false} = {}) {
 }
 
 function objectiveContent() {
-  const q = quest();
-  if (!state.starter) return {title:'A new Observer',text:'Meet Professor Lyra at the research lab. A Databeast is waiting to become your first companion.',count:'Speak to Lyra · Research lab',progress:0};
-  if (!state.flags.rivalDefeated) return {title:'The first bond',text:'Kai is waiting in the village square. Try your companion’s moves, guard, and a free DataDex scan.',count:'Challenge Kai · Village square',progress:20};
-  if (q.status === 'locked') return {title:'Beyond the village',text:'Follow the eastern road into the Twin Scholars’ Forest. Professor Inferra has a mystery for you.',count:'Meet Inferra · Forest field station',progress:35};
-  if (q.status === 'active' || q.status === 'ready') return {title:'The Nocturnal Mystery',text:observations().length < 6 ? 'The ranger only watches at night. Visit three habitats in both daylight and moonlight to test the claim.' : 'Your field notes tell a fuller story. Bring your evidence to Inferra and draw a conclusion.',count:observations().length + ' / 6 habitat & time observations',progress:40+observations().length*8};
-  if (!state.flags.recruitedVoltkit) return {title:'A spark of friendship',text:'Your investigation is complete. A curious Voltkit waits in the forest glade. Scan, weaken, and use a Bond Crystal.',count:'Recruit Voltkit · Spark glade',progress:90};
-  return {title:'An Observer awakens',text:'You questioned the evidence and made a new friend. Explore, review your DataDex, or master the sampling challenge.',count:'Stage 1 adventure complete',progress:100};
+  return getQuestGuide(state);
+}
+
+function objectiveDestination() {
+  const guide = objectiveContent();
+  if (!guide.targetId) return null;
+  const id = state.map === guide.map ? guide.targetId : state.map === 'village' ? 'gate' : 'exit';
+  return currentTargets().find(target => target.id === id);
+}
+
+function followObjective() {
+  if (state.battle) {openModal('battle');return;}
+  const target = objectiveDestination();
+  closeModal();
+  if (target) goTo(target);
 }
 
 function portrait(id, size = 120, extra = '') { return `<canvas class="creature-art ${extra}" width="${size}" height="${size}" data-species="${esc(id)}" aria-label="${esc(creatureName(id))}"></canvas>`; }
@@ -174,23 +183,15 @@ function updateUI() {
   $('map-coordinates').textContent = forest ? 'TWIN SCHOLARS · ROUTE 01' : 'VALE OF RECORDS · 01';
   $('world').setAttribute('aria-label', `${forest ? 'Twin Scholars’ Forest' : 'Harvest Village'}, ${state.time}. Use arrow keys or WASD to walk. E to interact. Click a destination.`);
   const objective = objectiveContent();
-  $('objective').innerHTML = `<div class="eyebrow">CURRENT OBJECTIVE</div><h3>${esc(objective.title)}</h3><p>${esc(objective.text)}</p><div class="objective-progress"><i style="width:${objective.progress}%"></i></div><div class="objective-count">${esc(objective.count)}</div>`;
-  const steps = [
-    {title:'Choose a companion',done:!!state.starter},
-    {title:'Battle your rival',done:state.flags.rivalDefeated},
-    {title:'Follow the forest road',done:quest().status !== 'locked'},
-    {title:'Question the evidence',done:quest().status === 'complete'},
-    {title:'Befriend a wild Databeast',done:state.flags.recruitedVoltkit}
-  ];
-  let currentSet = false;
+  $('objective').innerHTML = `<div class="eyebrow">CURRENT OBJECTIVE</div><h3>${esc(objective.title)}</h3><p class="quest-motivation">${esc(objective.why)}</p><p>${esc(objective.text)}</p><div class="objective-progress"><i style="width:${objective.progress}%"></i></div><div class="objective-count">${esc(objective.count)}</div>`;
+  const steps = getJourneySteps(state);
   $('journey-list').innerHTML = steps.map((s,i) => {
-    const current = !s.done && !currentSet; if (current) currentSet = true;
-    return `<li class="${s.done ? 'done' : current ? 'current' : ''}"><span class="step-circle">${s.done ? '✓' : i+1}</span>${esc(s.title)}</li>`;
+    return `<li class="${s.done ? 'done' : s.current ? 'current' : ''}"><span class="step-circle">${s.done ? '✓' : i+1}</span>${esc(s.title)}</li>`;
   }).join('');
   $('party-count').textContent = `${state.party.length} / 4`;
   $('party-grid').innerHTML = state.party.map(c => `<div class="party-card">${portrait(c.speciesId,80)}<div><h3>${esc(creatureName(c.speciesId))}</h3><p>Lv. ${c.level} · ${c.hp}/${c.maxHp} HP</p><div class="mini-hp"><i style="width:${Math.max(0,c.hp/c.maxHp*100)}%"></i></div></div></div>`).join('') + Array.from({length:Math.max(0,4-state.party.length)}, () => '<div class="party-card empty"><span>+</span><small>A bond to discover</small></div>').join('');
   $('supplies').innerHTML = `<span title="Healing potions"><b>♧</b> ${state.inventory.potions} potions</span><span title="Bond Crystals"><b>◇</b> ${state.inventory.bondCrystals} crystals</span><span title="Aether Coins"><b>◉</b> ${state.coins || 0}</span>`;
-  $('investigation-button').innerHTML = `Open investigation <span>↗</span>`;
+  $('investigation-button').innerHTML = `Quest journal <span>↗</span>`;
   if (!savingAvailable) $('save-status').textContent = 'Automatic saving unavailable · Export a save in Save & load';
   paintPortraits($('party-grid'));
   updatePrompt();
@@ -250,7 +251,7 @@ function interact(target = nearTarget()) {
   if (state.battle) { openModal('battle'); return; }
   if (!target) { openModal('places'); return; }
   path=[]; pathTarget=null;
-  if (target.id === 'lab') { openModal(state.starter ? 'lyra' : 'starters'); }
+  if (target.id === 'lab') { openModal(!state.starter ? 'starters' : quest().status === 'complete' && !state.flags.reportedToLyra ? 'lyra-report' : 'lyra'); }
   else if (target.id === 'kai') {
     if (!state.starter) { openDialogue('Kai','A friendly challenge','', 'kai-before-starter'); }
     else if (state.flags.rivalDefeated) { openModal('rival'); }
@@ -291,14 +292,14 @@ function closeModal() {
   if (returnFocus?.isConnected) returnFocus.focus({preventScroll:true}); else $('world').focus({preventScroll:true});
 }
 
-const conversationTypes = new Set(['starters','lyra','rival','sanctuary','tower','inferra','camp','wild','complete','battle-result','mastery']);
+const conversationTypes = new Set(['starters','lyra','lyra-report','report-complete','rival','sanctuary','tower','inferra','camp','wild','complete','battle-result','mastery']);
 
 function prepareDialogue(type, data = {}) {
   const context={
     playerName:state.player.name,starterName:creatureName(state.starter),
     rivalDefeated:state.flags.rivalDefeated,questStatus:quest().status,
     observationCount:observations().length,mastered:conceptStatus('concept_sampling_bias')==='mastered',
-    recruited:state.flags.recruitedVoltkit,time:state.time,...data
+    recruited:state.flags.recruitedVoltkit,reportedToLyra:state.flags.reportedToLyra,time:state.time,...data
   };
   if (conversationTypes.has(type)) {
     const conversation=getConversation(type,context);
@@ -343,6 +344,8 @@ function conversationActions() {
     return `<div class="dialogue-followup"><h3>Who will join your journey?</h3><div class="starter-grid">${Object.keys(descriptions).map(id=>`<button class="starter-card" data-action="choose" data-id="${id}">${portrait(id,140)}<h3>${esc(creatureName(id))}</h3><span class="type">${roles[id]}</span><p>${descriptions[id]}</p><div class="starter-stats"><span>Lv. 5</span><span>${esc(SPECIES[id].role)}</span></div><span class="choose">Choose ${esc(creatureName(id))} ↗</span></button>`).join('')}</div></div>`;
   }
   if (modal==='lyra') return `<div class="modal-actions"><button class="primary-button" data-action="dex">Open DataDex</button>${close}</div>`;
+  if (modal==='lyra-report') return `<div class="dialogue-followup"><div class="evidence-note">Your report: six habitat/time records, a finding about missing coverage, and the Sampling Compass.</div><div class="modal-actions"><button class="primary-button" data-action="report-findings">Share the field report</button>${close}</div></div>`;
+  if (modal==='report-complete') return `<div class="dialogue-followup completion"><div class="completion-mark">✧</div><h3>Your first expedition is complete.</h3><p>Lyra has your findings. Harvest Village will compare weather observations from more places and times. The cause of the Oracle’s failed forecast remains an open question.</p><div class="modal-actions"><button class="primary-button" data-action="journal">Review your journey</button>${close}</div></div>`;
   if (modal==='rival') return `<div class="dialogue-followup"><div class="evidence-note">Potions restore HP. After recruiting another companion, switching takes a turn.</div><div class="modal-actions"><button class="primary-button" data-action="start-battle" data-kind="rival">Challenge Kai ⚔</button>${close}</div></div>`;
   if (modal==='sanctuary') return `<div class="dialogue-followup"><div class="settings-grid"><div class="settings-row"><div><strong>Restore your party</strong><p>Recover all HP and Focus. Always free.</p></div><button class="primary-button small-button" data-action="heal">Heal party</button></div><div class="settings-row"><div><strong>Field supplies</strong><p>Replenish potions and Bond Crystals.</p></div><button class="secondary-button small-button" data-action="restock">Restock</button></div></div><div class="modal-actions">${close}</div></div>`;
   if (modal==='tower') return `<div class="dialogue-followup"><div class="forecast-strip"><div><span>ORACLE PREDICTION</span><strong>0 mm</strong></div><div><span>MEASURED RAINFALL</span><strong class="rain">46 mm</strong></div></div><div class="modal-actions"><button class="primary-button" data-action="dex">Review observations</button>${close}</div></div>`;
@@ -352,7 +355,7 @@ function conversationActions() {
   }
   if (modal==='camp') return `<div class="dialogue-followup"><div class="evidence-note">Current time: ${state.time==='day'?'daylight ☀':'nighttime ☾'}. Your existing observations stay recorded.</div><div class="modal-actions"><button class="primary-button" data-action="change-time">Rest until ${state.time==='day'?'night ☾':'day ☀'}</button>${close}</div></div>`;
   if (modal==='wild') return `<div class="dialogue-followup"><div class="welcome-art">${portrait('creature_voltkit')}</div><div class="evidence-note">Scanning and low HP improve bonding. Patient attempts build trust; a defeated Voltkit can be encountered again.</div><div class="modal-actions">${state.flags.recruitedVoltkit?'<button class="primary-button" data-action="dex">See Voltkit in the DataDex</button>':`<button class="primary-button" data-action="start-battle" data-kind="wild" ${!state.starter?'disabled':''}>Approach Voltkit ◇</button>`}${close}</div></div>`;
-  if (modal==='complete') return `<div class="dialogue-followup completion"><div class="completion-mark">✧</div><h3>A fuller picture of the forest.</h3><div class="reward-row"><span>✥ Sampling Compass</span><span>Sampling bias · Understood</span><span>Discovery recorded</span></div><div class="modal-actions"><button class="primary-button" data-action="close">Keep exploring →</button><button class="secondary-button" data-action="mastery">Try the optional challenge</button></div></div>`;
+  if (modal==='complete') return `<div class="dialogue-followup completion"><div class="completion-mark">✧</div><h3>A fuller picture of the forest.</h3><div class="reward-row"><span>✥ Sampling Compass</span><span>Sampling bias · Understood</span><span>Discovery recorded</span></div><p>Bring your field report back to Lyra in Harvest Village. Your Compass and records are already saved.</p><div class="modal-actions"><button class="primary-button" data-action="journal">Plan the return to Lyra</button><button class="secondary-button" data-action="close">Keep exploring →</button><button class="secondary-button" data-action="mastery">Try the optional challenge</button></div></div>`;
   if (modal==='battle-result') {
     const {won,recruited,events=[]}=modalData;
     const rested=events.some(event=>event.includes('needs rest'));
@@ -400,7 +403,8 @@ function renderModal({resetFocus=false} = {}) {
     const id=modalData.habitatId; const h=habitats().find(h=>h.id===id); const data=h?.observations?.[state.time] || h?.[state.time] || [];
     const recorded=hasObserved(id,state.time); const active=['active','ready','complete'].includes(quest().status);
     html=modalShell(h?.title || 'Forest habitat',`${state.time === 'day'?'☀ DAYLIGHT':'☾ MOONLIGHT'} · FIELD OBSERVATION`, `<p>${esc(h?.description || 'You take a quiet moment to watch the creatures in this habitat. These sightings belong to this place and this time.')}</p><div class="sighting-list">${data.map(o=>`<div class="sighting">${portrait(o.speciesId,100)}<h3>${esc(creatureName(o.speciesId))}</h3><small>${o.count} sightings</small></div>`).join('')}</div><div class="evidence-note">${recorded?'✓ This habitat and time are already in your field notes.':active?'Record this snapshot to compare it with other habitats and times.':'Meet Professor Inferra at the field station to begin the investigation.'} A sighting count describes what you saw; it does not count every creature living in the forest.</div><div class="modal-actions"><button class="primary-button" data-action="observe" data-id="${esc(id)}" ${recorded||!active?'disabled':''}>${recorded?'Observation recorded ✓':'Record in DataDex'}</button><button class="secondary-button" data-action="close">Continue exploring</button></div>`);
-  } else if (modal === 'investigation') html=investigationModal();
+  } else if (modal === 'journal') html=questJournalModal();
+  else if (modal === 'investigation') html=investigationModal();
   else if (modal === 'battle') html=battleModal();
   else if (modal === 'dex') html=dexModal();
   else if (modal === 'save') html=saveModal();
@@ -429,6 +433,14 @@ function renderModal({resetFocus=false} = {}) {
   }
   focusable?.focus({preventScroll:true});
   const log=$('modal-root').querySelector('.battle-log'); if (log) log.scrollTop=log.scrollHeight;
+}
+
+function questJournalModal() {
+  const guide = objectiveContent();
+  const target = objectiveDestination();
+  const missing = getMissingObservations(state);
+  const stages = getJourneySteps(state);
+  return modalShell('Your quest journal','THE FIRST EXPEDITION',`<div class="quest-brief"><p class="eyebrow">${esc(guide.count)}</p><h3>${esc(guide.title)}</h3><p>${esc(guide.why)}</p><h4>What to do</h4><p>${esc(guide.text)}</p><h4>Complete when</h4><p>${esc(guide.completeWhen)}</p><div class="evidence-note"><strong>If you’re stuck</strong><br>${esc(guide.hint)}</div></div><ol class="quest-route">${stages.map(step=>`<li class="${step.done?'done':step.current?'current':''}" ${step.current?'aria-current="step"':''}>${step.done?'✓ ':''}${esc(step.title)}</li>`).join('')}</ol>${quest().status==='active'?`<h3>Still to record</h3><ul class="quest-missing">${missing.map(row=>`<li>${esc(row.label)}</li>`).join('')}</ul>`:''}<div class="modal-actions">${target?`<button class="primary-button" data-action="next-objective">Walk to ${esc(target.name)}</button>`:''}${quest().status!=='locked'?'<button class="secondary-button" data-action="investigation">Review field evidence</button>':''}<button class="secondary-button" data-action="close">Back to the field</button></div><div class="quest-optional"><h3>Optional discoveries</h3><p>These do not block the main story.</p><p>${state.flags.recruitedVoltkit?'✓ Voltkit bonded':'◇ Befriend Voltkit at Spark Glade after Kai’s battle. Scan, weaken, then offer a Bond Crystal.'}</p><p>${conceptStatus('concept_sampling_bias')==='mastered'?'✓ Sampling mastery recorded':'✧ Plan a stronger sample with Inferra after the investigation.'}</p><p>The Weather Tower’s rainfall book adds context to the village’s failed forecast. Later Chapter One regions are future content.</p></div>`);
 }
 
 function investigationModal() {
@@ -512,7 +524,8 @@ $('modal-root').addEventListener('click',event=>{
   }
   else if (a==='hint') {
     if (dispatch({type:'REQUEST_HINT'},{quiet:true})) openDialogue('A nudge from Inferra','FIELD GUIDANCE','','inferra-hint',{
-      returnTo:'investigation',hintLevel:quest().hints
+      returnTo:'investigation',hintLevel:quest().hints,
+      missingObservations:getMissingObservations(state).map(row=>row.label),hintTarget:objectiveContent().targetId
     });
   }
   else if (a==='master') {
@@ -530,6 +543,9 @@ $('modal-root').addEventListener('click',event=>{
   else if (a==='dex-tab') {dexTab=button.dataset.tab;renderModal();}
   else if (a==='investigation') openModal('investigation');
   else if (a==='places') openModal('places');
+  else if (a==='journal') openModal('journal');
+  else if (a==='next-objective') followObjective();
+  else if (a==='report-findings') {if(dispatch({type:'REPORT_FINDINGS'},{quiet:true})){openModal('report-complete');chime('success');}}
   else if (a==='walk-to') { const target=currentTargets().find(t=>t.id===button.dataset.id);closeModal();if(target)goTo(target); }
   else if (a==='save') {persist(true);renderModal();}
   else if (a==='load') {
@@ -600,7 +616,7 @@ $('dex-button').addEventListener('click',()=>openModal('dex'));
 $('save-button').addEventListener('click',()=>openModal('save'));
 $('help-button').addEventListener('click',()=>openModal('help'));
 $('brand').addEventListener('click',event=>{event.preventDefault();openModal(state.battle?'battle':'help');});
-$('investigation-button').addEventListener('click',()=>openModal(state.battle?'battle':'investigation'));
+$('investigation-button').addEventListener('click',()=>openModal(state.battle?'battle':'journal'));
 $('interact-button').addEventListener('click',()=>interact());
 $('mobile-interact').addEventListener('click',()=>interact());
 $('time-button').addEventListener('click',()=>{

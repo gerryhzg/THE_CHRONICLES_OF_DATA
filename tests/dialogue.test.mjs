@@ -180,6 +180,22 @@ test('Inferra feedback explains each misconception and uses supported portrait e
   }
 });
 
+test('Inferra hints use missing field records and switch to comparison once collection is ready', () => {
+  const missingObservations = ['Riverbank · moonlight'];
+  const remaining = getConversation('inferra-hint', {questStatus:'active', hintLevel:2, missingObservations});
+  assert.ok(textOf(remaining).includes(missingObservations[0]), 'Field guidance must identify the actual missing category');
+  const camp = getConversation('inferra-hint', {questStatus:'active', hintLevel:3, missingObservations, hintTarget:'camp'});
+  assert.match(textOf(camp), /campfire/i);
+  const record = getConversation('inferra-hint', {questStatus:'active', hintLevel:3, missingObservations, hintTarget:'riverbank', time:'night'});
+  assert.ok(textOf(record).includes(missingObservations[0]));
+  assert.match(textOf(record), /Record in DataDex/);
+  const ready = getConversation('inferra-hint', {questStatus:'ready', hintLevel:1, missingObservations:[]});
+  assert.match(textOf(ready), /six/i);
+  assert.match(textOf(ready), /compar/i);
+  assert.notDeepEqual(ready.segments, getConversation('inferra-hint', {questStatus:'active', hintLevel:1}).segments);
+  for (const conversation of [remaining, camp, record, ready]) assertReadableConversation(conversation);
+});
+
 test('story and battle guidance preserve evidence and the playable mechanics', () => {
   const forecast = textOf(getConversation('tower'));
   assert.match(forecast, /0\s*mm/);
@@ -204,7 +220,7 @@ test('story and battle guidance preserve evidence and the playable mechanics', (
 
 test('all conversation branches contain readable segments and supported speaker portraits', () => {
   const cases = [
-    ['starters'], ['lyra'], ['lyra', { rivalDefeated: true }],
+    ['starters'], ['lyra'], ['lyra', { rivalDefeated: true }], ['lyra', {reportedToLyra:true}], ['lyra-report'], ['report-complete'],
     ['rival'], ['rival', { rivalDefeated: true }], ['kai-before-starter'],
     ['gate-locked'], ['sanctuary'], ['tower'], ['inferra'],
     ...['locked', 'active', 'ready', 'complete'].map(questStatus => ['inferra', { questStatus, observationCount: 2 }]),

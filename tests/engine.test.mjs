@@ -98,9 +98,9 @@ test('loss heals and returns to the village, and fleeing preserves retryable wil
 
 test('complete six-category investigation, revise incorrect finding, and master concept', () => {
   let state = winRival(starters[2]);
+  state = step(state, { type: 'MOVE', map: 'forest', x: 9, y: 12, facing: 'up' });
   state = step(state, { type: 'START_INVESTIGATION' });
   assert.throws(() => act(state, { type: 'SUBMIT_FINDING', answer: 'biased' }), /all three habitats/);
-  state = step(state, { type: 'MOVE', map: 'forest', x: 9, y: 12, facing: 'up' });
   state = step(state, { type: 'REQUEST_HINT' });
   assert.equal(state.quests.nocturnal.hints, 1);
   for (const time of ['night', 'day']) {
@@ -135,6 +135,74 @@ test('complete six-category investigation, revise incorrect finding, and master 
   assert.deepEqual(parseGame(serializeGame(state)), state);
 });
 
+test('begin investigation at Inferra, finish evidence, then deliver the village report once', () => {
+  let state = createGame();
+  assert.throws(() => act(state, { type: 'REPORT_FINDINGS' }), /Finish the Nocturnal Mystery/);
+  state = winRival(starters[0]);
+  assert.throws(() => act(state, { type: 'START_INVESTIGATION' }), /Meet Professor Inferra/);
+  state = step(state, { type: 'MOVE', map: 'forest', x: 9, y: 12, facing: 'up' });
+  state = step(state, { type: 'START_INVESTIGATION' });
+  const hint = act(state, { type: 'REQUEST_HINT' });
+  state = hint.state;
+  assert.equal(state.quests.nocturnal.hints, 1, 'hints are available before the first observation');
+  assert.match(hint.events.join(' '), /Sunlit Meadow \(day\)/);
+  for (const time of ['day', 'night']) {
+    state = step(state, { type: 'SET_TIME', time });
+    for (const habitat of HABITATS) state = step(state, { type: 'OBSERVE', habitatId: habitat.id });
+  }
+  state = step(state, { type: 'SUBMIT_FINDING', answer: 'biased' });
+  assert.equal(state.flags.reportedToLyra, false, 'finding confirmation still leaves the village report to deliver');
+  assert.throws(() => act(state, { type: 'REPORT_FINDINGS' }), /Harvest Village/);
+  state = step(state, { type: 'MOVE', map: 'village', x: 16, y: 13, facing: 'up' });
+  state = step(state, { type: 'START_BATTLE', kind: 'rival' });
+  assert.throws(() => act(state, { type: 'REPORT_FINDINGS' }), /Finish or flee the battle/);
+  for (let turns = 0; state.battle && turns < 12; turns++) {
+    state = step(state, { type: 'BATTLE_MOVE', moveId: state.party[0].focus >= 2 ? 'pattern_pulse' : 'observe_strike' });
+  }
+  assert.equal(state.battle, null);
+  const before = serializeGame(state);
+  const legacyComplete = JSON.parse(before);
+  delete legacyComplete.flags.reportedToLyra;
+  assert.deepEqual(parseGame(JSON.stringify(legacyComplete)), state, 'older completed investigations still offer the new report');
+  const result = act(state, { type: 'REPORT_FINDINGS' });
+  assert.equal(serializeGame(state), before, 'reporting must not mutate its input');
+  assert.equal(result.state.flags.reportedToLyra, true);
+  assert.equal(result.state.coins, state.coins);
+  assert.equal(result.state.researchPoints, state.researchPoints);
+  assert.match(result.events.join(' '), /Stage 1 main story is complete/);
+  assert.throws(() => act(result.state, { type: 'REPORT_FINDINGS' }), /already reported/);
+  assert.deepEqual(parseGame(serializeGame(result.state)), result.state, 'delivered report survives save/load');
+  assert.equal(result.state.flags.recruitedVoltkit, false, 'recruitment is not a main story gate');
+  assert.equal(result.state.dex.concepts.concept_sampling_bias, 'understood', 'mastery is not a main story gate');
+  state = step(result.state, { type: 'MASTER_CONCEPT', answer: 'representative' });
+  assert.equal(state.dex.concepts.concept_sampling_bias, 'mastered', 'optional reflection remains available after reporting');
+  state = step(state, { type: 'START_BATTLE', kind: 'wild' });
+  state = step(state, { type: 'BATTLE_SCAN' });
+  state = step(state, { type: 'BATTLE_BOND' }, () => 0);
+  assert.equal(state.flags.recruitedVoltkit, true, 'optional recruitment remains available after reporting');
+  assert.equal(state.flags.reportedToLyra, true);
+});
+
+test('exact legacy v1 saves migrate the report flag and preserve active battles', () => {
+  let state = winRival(starters[1]);
+  state = step(state, { type: 'START_BATTLE', kind: 'wild' });
+  state = step(state, { type: 'BATTLE_SCAN' });
+  state = step(state, { type: 'BATTLE_GUARD' });
+  const legacy = structuredClone(state);
+  delete legacy.flags.reportedToLyra;
+  const originalJson = JSON.stringify(legacy);
+  const migrated = parseGame(originalJson);
+  assert.equal(migrated.flags.reportedToLyra, false);
+  assert.deepEqual(migrated, state);
+  assert.equal(JSON.stringify(legacy), originalJson, 'migration leaves the supplied legacy record untouched');
+  assert.deepEqual(act(migrated, { type: 'BATTLE_MOVE', moveId: 'observe_strike' }), act(state, { type: 'BATTLE_MOVE', moveId: 'observe_strike' }));
+  const invalid = change => { const value = structuredClone(legacy); change(value); return JSON.stringify(value); };
+  assert.throws(() => parseGame(invalid(value => { value.flags.extra = false; })), /flags/);
+  assert.throws(() => parseGame(invalid(value => { delete value.flags.introSeen; })), /flags/);
+  assert.throws(() => parseGame(invalid(value => { value.flags.compass = 'false'; })), /flags/);
+  assert.throws(() => parseGame(invalid(value => { value.extra = false; })), /unexpected/);
+});
+
 test('save/load roundtrip supports midbattle continuation and missing/corrupted local storage', () => {
   let state = winRival(starters[0]);
   state = step(state, { type: 'START_BATTLE', kind: 'wild' });
@@ -162,6 +230,9 @@ test('reject malformed, oversized, unsupported, and tampered saves', () => {
   assert.throws(() => parseGame(invalid(state => { state.schemaVersion = 2; })), /version/);
   assert.throws(() => parseGame(invalid(state => { state.inventory.potions = -1; })), /inventory/);
   assert.throws(() => parseGame(invalid(state => { state.flags.compass = true; })), /Compass/);
+  assert.throws(() => parseGame(invalid(state => { state.flags.reportedToLyra = true; })), /before the investigation/);
+  assert.throws(() => parseGame(invalid(state => { state.flags.reportedToLyra = 'true'; })), /flags/);
+  assert.throws(() => parseGame(invalid(state => { state.flags.extra = false; })), /flags/);
   assert.throws(() => parseGame(invalid(state => { state.player.x = '12'; })), /position/);
   assert.throws(() => parseGame(invalid(state => { state.player.x = 32; })), /position/);
   assert.throws(() => parseGame(invalid(state => { state.player.y = 22; })), /position/);
@@ -170,8 +241,8 @@ test('reject malformed, oversized, unsupported, and tampered saves', () => {
   assert.throws(() => parseGame(invalid(state => { state.dex.species.creature_voltkit.seen = 'yes'; })), /species entry/);
   assert.throws(() => parseGame(invalid(state => { state.unknown = {}; })), /unexpected/);
   let state = winRival(starters[0]);
-  state = step(state, { type: 'START_INVESTIGATION' });
   state = step(state, { type: 'MOVE', map: 'forest', x: 9, y: 12, facing: 'up' });
+  state = step(state, { type: 'START_INVESTIGATION' });
   state = step(state, { type: 'OBSERVE', habitatId: 'habitat_meadow' });
   state.quests.nocturnal.observations[0].sightings[0].count = 99;
   assert.throws(() => parseGame(JSON.stringify(state)), /counts/);

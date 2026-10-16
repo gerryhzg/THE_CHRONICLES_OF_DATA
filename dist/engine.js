@@ -60,6 +60,8 @@ export const HABITATS = [
 const STARTERS = ['creature_statifox', 'creature_algobear', 'creature_terradeer'];
 const DIRECTIONS = ['up', 'down', 'left', 'right'];
 const CONCEPTS = ['concept_observation', 'concept_sampling_bias'];
+const LEGACY_FLAGS = ['introSeen', 'rivalDefeated', 'recruitedVoltkit', 'compass'];
+const GAME_FLAGS = [...LEGACY_FLAGS, 'reportedToLyra'];
 
 export function createGame() {
   return {
@@ -73,7 +75,7 @@ export function createGame() {
     },
     quests: { firstBond: { status: 'locked' }, nocturnal: { status: 'locked', observations: [], attempts: 0, hints: 0 } },
     battle: null,
-    flags: { introSeen: false, rivalDefeated: false, recruitedVoltkit: false, compass: false },
+    flags: { introSeen: false, rivalDefeated: false, recruitedVoltkit: false, compass: false, reportedToLyra: false },
     coins: 0, researchPoints: 0,
   };
 }
@@ -365,6 +367,7 @@ export function act(currentState, action, rng = Math.random) {
     case 'START_INVESTIGATION': {
       requirePeace(state);
       ensure(state.flags.rivalDefeated, 'Complete your first battle with Kai before taking the forest assignment.');
+      ensure(state.map === 'forest', "Meet Professor Inferra in Twin Scholars' Forest to begin the investigation.");
       ensure(state.quests.nocturnal.status === 'locked', 'The investigation has already begun.');
       state.quests.nocturnal.status = 'active';
       advanceConcept(state, 'concept_sampling_bias', 'encountered');
@@ -407,6 +410,16 @@ export function act(currentState, action, rng = Math.random) {
       } else {
         events.push(action.answer === 'nocturnal' ? 'Inferra: Look at the daytime records. Does a night-only sample describe the whole forest? You can revise your finding.' : 'Inferra: These observations give useful evidence, not certainty about every creature or future sighting. You can revise your finding.');
       }
+      break;
+    }
+    case 'REPORT_FINDINGS': {
+      requirePeace(state);
+      ensure(state.map === 'village', 'Return to Professor Lyra in Harvest Village to deliver your findings.');
+      ensure(state.quests.nocturnal.status === 'complete', 'Finish the Nocturnal Mystery with Professor Inferra before reporting your findings.');
+      ensure(!state.flags.reportedToLyra, 'You have already reported your findings to Professor Lyra.');
+      state.flags.reportedToLyra = true;
+      events.push('Lyra: Your forest records show why we must check who and what our observations leave out. We will compare local rain measurements with the Oracle forecast and collect evidence across places and times.');
+      events.push('Field report delivered. Harvest Village has a plan, and your Stage 1 main story is complete. Optional recruitment and DataDex reflection remain available.');
       break;
     }
     case 'REQUEST_HINT': {
@@ -471,7 +484,7 @@ function validateGame(state) {
     ensure(!state.party.some(member => member.speciesId === id) || entry.recruited, 'Party member missing from DataDex.');
   });
   ensure(Object.values(state.dex.concepts).every(value => ['unknown', 'encountered', 'understood', 'mastered'].includes(value)), 'Invalid concept status.');
-  ensure(keysExactly(state.flags, ['introSeen', 'rivalDefeated', 'recruitedVoltkit', 'compass']) && Object.values(state.flags).every(value => typeof value === 'boolean'), 'Invalid game flags.');
+  ensure(keysExactly(state.flags, GAME_FLAGS) && Object.values(state.flags).every(value => typeof value === 'boolean'), 'Invalid game flags.');
   ensure(state.map !== 'forest' || state.flags.rivalDefeated, 'The forest has not been unlocked.');
   ensure(state.flags.recruitedVoltkit === state.party.some(member => member.speciesId === 'creature_voltkit'), 'Voltkit recruitment records do not match.');
   ensure(keysExactly(state.quests, ['firstBond', 'nocturnal']) && keysExactly(state.quests.firstBond, ['status']) && keysExactly(state.quests.nocturnal, ['status', 'observations', 'attempts', 'hints']), 'Invalid quest records.');
@@ -496,6 +509,7 @@ function validateGame(state) {
   ensure(quest.status !== 'active' || quest.observations.length < 6, 'Completed observations must be ready for review.');
   ensure(quest.status === 'locked' || state.flags.rivalDefeated, 'Investigation has not been unlocked.');
   ensure(state.flags.compass === (quest.status === 'complete'), 'Sampling Compass and investigation status do not match.');
+  ensure(!state.flags.reportedToLyra || quest.status === 'complete', 'Findings cannot be reported before the investigation is complete.');
   if (state.battle !== null) {
     const battle = state.battle;
     ensure(keysExactly(battle, ['kind', 'enemy', 'activeIndex', 'turn', 'scanned', 'log', 'enemyHistory', 'guarded', 'enemyGuarded', 'bondAttempts']), 'Invalid battle record.');
@@ -521,6 +535,10 @@ export function parseGame(json) {
   ensure(typeof json === 'string' && json.length <= SAVE_LIMIT, 'Save must be text smaller than 128 KB.');
   let state;
   try { state = JSON.parse(json); } catch { fail('The save file is not valid JSON.'); }
+  // Preserve existing v1 saves while accepting only the exact original flag schema.
+  if (isObject(state) && state.schemaVersion === SCHEMA_VERSION && keysExactly(state.flags, LEGACY_FLAGS)) {
+    state = { ...state, flags: { ...state.flags, reportedToLyra: false } };
+  }
   validateGame(state);
   return state;
 }

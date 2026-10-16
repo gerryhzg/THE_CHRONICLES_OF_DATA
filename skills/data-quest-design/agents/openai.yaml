@@ -1,0 +1,4 @@
+interface:
+  display_name: "Data Quest Design"
+  short_description: "Build story-driven educational RPG quests"
+  default_prompt: "Use $data-quest-design to build a quest with clear stakes, playable evidence gathering, and a satisfying next step."

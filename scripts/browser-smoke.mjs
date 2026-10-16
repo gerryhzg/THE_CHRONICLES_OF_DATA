@@ -59,6 +59,15 @@ const action = (name, extra = '') => click(`[data-action="${name}"]${extra}`);
 const saved = () => evaluate(`JSON.parse(localStorage.getItem(${JSON.stringify(saveKey)}))`);
 const waitHeading = text => eventually(() => evaluate(`document.querySelector('#modal-heading')?.textContent.includes(${JSON.stringify(text)})`), `Dialog did not open: ${text}`);
 
+async function reloadGame() {
+  const previousLoader = (await cdp('Page.getFrameTree')).frameTree.frame.loaderId;
+  await cdp('Page.reload');
+  await eventually(async () => {
+    const currentLoader = (await cdp('Page.getFrameTree')).frameTree.frame.loaderId;
+    return currentLoader !== previousLoader && await evaluate(`!!document.querySelector('#objective h3')`);
+  }, 'Reloaded game did not finish initializing');
+}
+
 async function pressKey(key, code, windowsVirtualKeyCode, autoRepeat = false) {
   const text = key === 'Enter' ? '\r' : key.length === 1 ? key : undefined;
   await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key, code, windowsVirtualKeyCode, autoRepeat, ...(text === undefined ? {} : { text, unmodifiedText: text }) });
@@ -223,16 +232,16 @@ async function checkSpokenDialogue() {
     await pressKey('Escape', 'Escape', 27);
     assert.ok((await speech()).canceled > beforeClose.canceled, 'Closing a conversation must cancel speech');
     assert.equal(await dialogue(), null);
-    await cdp('Page.reload');
+    await reloadGame();
     await eventually(() => evaluate(`document.querySelector('#speech-toggle-button')?.getAttribute('aria-pressed') === 'true'`), 'Voice preference must survive reload');
     assert.equal((await speech()).count, 0, 'Reloading without dialogue must not speak old content');
     await click('#speech-toggle-button');
-    await cdp('Page.reload');
+    await reloadGame();
     await eventually(() => evaluate(`document.querySelector('#speech-toggle-button')?.getAttribute('aria-pressed') === 'false'`), 'Disabled voice preference must survive reload');
     await cdp('Page.removeScriptToEvaluateOnNewDocument', { identifier: mock.identifier });
     unsupported = await cdp('Page.addScriptToEvaluateOnNewDocument', { source: `Object.defineProperty(window, 'SpeechSynthesisUtterance', { configurable: true, value: undefined }); Object.defineProperty(window, 'speechSynthesis', { configurable: true, value: undefined });` });
     await evaluate(`localStorage.removeItem(${JSON.stringify(saveKey)}); localStorage.setItem(${JSON.stringify(SPEECH_PREFERENCE_KEY)}, 'true')`);
-    await cdp('Page.reload');
+    await reloadGame();
     await waitHeading('Every adventure');
     await action('begin');
     const unavailableFirst = await dialogue();
@@ -449,6 +458,14 @@ try {
     }
   }
   assert.equal((await saved()).quests.nocturnal.observations.length, 6);
+  await click('#investigation-button');
+  await action('investigation');
+  await action('hint');
+  const readyHint = await finishDialogue();
+  assert.match(readyHint.map(segment => segment.line).join(' '), /compar/i, 'Completed fieldwork hints must guide comparison');
+  assert.equal((await saved()).quests.nocturnal.observations.length, 6, 'Hints must preserve every recorded category');
+  await action('dialogue-return');
+  await close();
   await visit('inferra', 'The Nocturnal Mystery');
   const inferraReady = await inferraDialogue('Inferra ready investigation revisit');
   assert.equal((await saved()).quests.nocturnal.status, 'ready');
@@ -508,6 +525,40 @@ try {
   checks.push('Inferra portraits and expressions, initial/active/ready/completed NPC conversations, Next/Back and Enter/Space/E, mobile fit, held-key and gated-action safety');
   checks.push('All six habitat/time observations, portrait guidance and revised conclusion, Sampling Compass, wrong mastery feedback retry, mastery success and DataDex discoveries');
 
+  assert.equal((await saved()).flags.recruitedVoltkit, false);
+  await click('#investigation-button');
+  await waitHeading('Your quest journal');
+  assert.equal(await evaluate(`!!document.querySelector('[data-action="next-objective"]')`), true, 'A finished investigation must guide the player home');
+  await screenshot('quest-journal.png');
+  await screenshot('quest-journal-mobile.png', true);
+  assert.equal(await evaluate('document.documentElement.scrollWidth <= 390'), true, 'Quest journal must fit on mobile');
+  await cdp('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1050, deviceScaleFactor: 1, mobile: false });
+  await action('next-objective');
+  await eventually(async () => (await saved()).map === 'village', 'Quest journal must lead to the forest exit');
+  await click('#investigation-button');
+  await action('next-objective');
+  await waitHeading('Bring the evidence home');
+  await noDialogueActions(['report-findings'], 'Sharing the report must wait for Lyra dialogue');
+  assert.equal((await saved()).flags.reportedToLyra, false, 'Reading the report scene must not finish the quest');
+  await finishDialogue();
+  const reportLastLine = await dialogue();
+  await evaluate(`document.querySelector('[data-action="report-findings"]').focus()`);
+  await heldDialogueKeys(reportLastLine, 'Held keys must not submit the report');
+  await action('report-findings');
+  assert.equal((await saved()).flags.reportedToLyra, true);
+  assert.equal((await saved()).flags.recruitedVoltkit, false, 'Main story must finish without optional recruitment');
+  await waitHeading('A first step for Harvest Village');
+  await close();
+  assert.equal(await evaluate(`document.querySelector('#objective').textContent.includes('Stage 1 main story complete')`), true);
+  await reloadGame();
+  await eventually(async () => (await saved()).flags.reportedToLyra, 'The field report must survive reload');
+  await visit('lab', 'Listen to the world');
+  await finishDialogue();
+  assert.equal(await evaluate(`!!document.querySelector('[data-action="report-findings"]')`), false, 'Returning to Lyra must not offer duplicate completion');
+  await close();
+  checks.push('Quest journal purpose/action/completion/hints, mobile fit, guided return to village and lab, gated report, optional recruitment independence, report save/reload and completed Lyra revisit');
+  await visit('gate');
+
   await visit('voltkit', 'A spark in');
   await finishDialogue();
   await action('start-battle', '[data-kind="wild"]');
@@ -515,7 +566,7 @@ try {
   await action('battle-move', '[data-id="observe_strike"]');
   await action('battle-move', '[data-id="observe_strike"]');
   const midbattle = await saved();
-  await cdp('Page.reload');
+  await reloadGame();
   await waitHeading('Wild Voltkit encounter');
   assert.deepEqual(await saved(), midbattle, 'Reload must preserve the unfinished encounter');
   await action('save-menu');
@@ -562,13 +613,13 @@ try {
   assert.deepEqual(await saved(), completed);
   await action('load');
   await close();
-  await cdp('Page.reload');
-  await eventually(() => evaluate(`document.querySelector('#objective')?.textContent.includes('Stage 1 adventure complete')`), 'Completed progress did not resume');
+  await reloadGame();
+  await eventually(() => evaluate(`document.querySelector('#objective')?.textContent.includes('Stage 1 main story complete')`), 'Completed progress did not resume');
   assert.deepEqual(await saved(), completed);
   checks.push('Sanctuary healing/restocking, DataDex field notes, export/new journey/import, final reload');
   await screenshot('completed.png');
   assert.deepEqual(errors, [], 'Browser runtime must have no errors');
-  await writeFile(resolve(artifactDir, 'browser-smoke.json'), JSON.stringify({ status: 'passed', url, checks, errors, screenshots: ['dialogue.png', 'dialogue-mobile.png', 'inferra-dialogue.png', 'inferra-mobile.png', 'prototype.png', 'mobile.png', 'completed.png'] }, null, 2));
+  await writeFile(resolve(artifactDir, 'browser-smoke.json'), JSON.stringify({ status: 'passed', url, checks, errors, screenshots: ['dialogue.png', 'dialogue-mobile.png', 'inferra-dialogue.png', 'inferra-mobile.png', 'quest-journal.png', 'quest-journal-mobile.png', 'prototype.png', 'mobile.png', 'completed.png'] }, null, 2));
   console.log(JSON.stringify({ status: 'passed', checks, errors }, null, 2));
 } catch (error) {
   errors.push(error.stack || error.message);

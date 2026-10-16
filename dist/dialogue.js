@@ -17,19 +17,47 @@ export function getConversation(id, context = {}) {
         line('lyra', 'happy', 'Take your time. This is a friendship, not a race. Kai can survive a few more minutes.'),
       ], 'Meet the starters');
     case 'lyra':
+      if (context.reportedToLyra) return conversation('Listen to the world', 'RESEARCH LAB', [
+        line('lyra', 'happy', `${player}, good to see you. Your field report is safely in the village records. Dry shelf, this time.`),
+        line('lyra', 'thoughtful', 'Rowan and I are arranging weather observations across different places and times. We need to know whose weather our records describe.'),
+        line('lyra', 'happy', 'Your first expedition is complete. Explore with your companions, or revisit Inferra if you fancy her optional research challenge.'),
+      ], 'Review the DataDex');
       return conversation('Listen to the world', 'RESEARCH LAB', [
         line('lyra', 'happy', `Good to see you, ${player}. ${starter} looks quite at home beside you.`),
         line('lyra', 'concerned', 'The Archive keeps dismissing our rainfall records. I used to call that place home. Now I wonder what evidence it\'s leaving out.'),
+        line('observer', 'thoughtful', 'How do we find out who or what is missing?'),
         context.rivalDefeated
-          ? line('lyra', 'thoughtful', 'Take the eastern road to Professor Inferra in the forest. She prefers her research with mud on it.')
-          : line('lyra', 'thoughtful', 'Kai is waiting in the square. Try your companion\'s moves and a DataDex scan. Don\'t let all that confidence distract you.'),
+          ? line('lyra', 'thoughtful', 'Take the eastern road to Professor Inferra in the forest. She can help you test whether a set of records leaves out whole places or times.')
+          : line('lyra', 'thoughtful', 'Kai is waiting in the square. Try your companion\'s moves and a DataDex scan before taking the eastern road to Inferra. You\'ll want to look after each other out there.'),
+        line('lyra', 'thoughtful', 'Bring Inferra\'s findings back to me here. We won\'t solve the forecast by counting forest creatures, but we can learn which questions to ask about our weather records.'),
         line('lyra', 'happy', 'Your DataDex keeps the creatures and discoveries you record. Leave room for questions, too. That\'s where the interesting work starts.'),
       ], 'Review the DataDex');
+    case 'lyra-report':
+      return conversation('Bring the evidence home', 'RESEARCH LAB', [
+        line('lyra', 'happy', `${player}! You made it back. And that compass looks considerably more useful than the mud on your boots.`),
+        line('observer', 'thoughtful', 'We recorded the meadow, riverbank, and canopy in daylight and moonlight. Six habitat and time records, all in the DataDex.'),
+        line('lyra', 'thoughtful', 'And what did those places and times add to the ranger\'s picture?'),
+        line('observer', 'thoughtful', 'His canopy-at-night patrol missed other activity. Our wider sample challenged his claim, but we still haven\'t seen every creature.'),
+        line('lyra', 'thoughtful', 'That\'s a useful finding. Rowan\'s rainfall book deserves the same care: where and when were readings taken, and which places went unrecorded?'),
+        line('lyra', 'concerned', 'The forest records don\'t tell us why the Oracle missed our rain. They do give us a better way to investigate, without dismissing the people standing in it.'),
+        line('lyra', 'happy', 'Show me your six records and Inferra\'s finding. Let\'s put your field report in the village records.'),
+      ], 'Share the field report');
+    case 'report-complete':
+      return conversation('A first step for Harvest Village', 'FIELD REPORT COMPLETE', [
+        line('lyra', 'happy', `Your report is filed, ${player}. Six habitat and time records, Inferra\'s finding, and a note about what we still don\'t know.`),
+        line('rowan', 'thoughtful', 'I brought the rainfall book. A wet field is worth writing down, even if the Oracle would rather it stayed dry.'),
+        line('lyra', 'thoughtful', 'Rowan and I will arrange weather readings across different places and times. We\'ll keep how and where we measure alongside the numbers.'),
+        line('observer', 'thoughtful', 'So we haven\'t found why the forecast failed yet.'),
+        line('lyra', 'thoughtful', 'Not yet. But we have a stronger question than "who should we trust?" Now we can ask what each record includes, and what it leaves out.'),
+        line('rowan', 'happy', 'And someone came home with notes instead of another promise. That gives me something to work with.'),
+        line('lyra', 'happy', 'Your first expedition is complete. Computron wrote about a delivery problem; we\'ll visit on a later journey. For today, you\'ve brought something useful home.'),
+      ], 'Return to Harvest Village');
     case 'rival':
       return conversation('A friendly rivalry', 'VILLAGE SQUARE', [
         line('kai', 'happy', context.rivalDefeated
           ? `Back for a rematch, ${player}? Good. I was just about to declare myself unbeatable.`
           : `There you are, ${player}! You, ${starter}, and me. I hope you brought a victory pose.`),
+        line('kai', 'thoughtful', 'Lyra asked me to give you some practice before the forest. I volunteered immediately. Very public-spirited of me.'),
         line('kai', 'determined', 'Attack when you\'re ready. Need Focus back? Guard. You\'ll take less damage, too. I do give sensible advice occasionally.'),
         line('observer', 'thoughtful', 'Does scanning use my turn?'),
         line('kai', 'thoughtful', 'Nope. One free scan per battle, no turn spent. It shows moves already observed, not a promise about my next one. I enjoy being unpredictable.'),
@@ -56,6 +84,7 @@ export function getConversation(id, context = {}) {
         line('lyra', 'thoughtful', 'Forty-six. That\'s quite a lot of "no rain." Did you keep the gauge record?'),
         line('rowan', 'thoughtful', 'Right here. My father started this rainfall book. I use it to decide when to sow. Those seedlings need to get us through winter.'),
         line('lyra', 'concerned', 'We\'ll make sure those records are heard. One failed forecast doesn\'t explain the whole Oracle, but it gives us a reason to investigate.'),
+        line('lyra', 'thoughtful', 'Inferra studies how records can miss parts of the world. Once you and your companion are ready for the forest, her fieldwork is a good place to start.'),
         line('rowan', 'thoughtful', 'Then take a look. The rain\'s done enough talking for both of us.'),
       ], 'Review the rainfall records');
     case 'inferra': {
@@ -74,28 +103,56 @@ export function getConversation(id, context = {}) {
         line('inferra', 'happy', `${player}! How's the Sampling Compass? You earned it by noticing the gaps in a very tidy notebook.`),
         line('inferra', 'thoughtful', 'Your broader sample challenged the ranger\'s claim. It still can\'t tell us how every creature behaves. Forests rarely fit neatly in notebooks.'),
         line('inferra', 'neutral', 'Keep noting where and when you look. If fresh evidence changes the picture, change your conclusion. That\'s progress.'),
+        context.reportedToLyra
+          ? line('inferra', 'happy', 'Lyra has your report now. Good. A useful discovery ought to make it out of the notebook and back to the people who need it.')
+          : line('inferra', 'neutral', 'Take the western path back to Harvest Village and show Lyra your six records at her lab. Tell her what our sample missed, too.'),
         ...(context.mastered ? [line('inferra', 'happy', 'And your DataDex records your sampling mastery. Next expedition, you can plan the route. I\'ll carry the notebooks.')] : []),
       ], 'Review your investigation');
       return conversation('Is the whole forest nocturnal?', 'FOREST FIELD STATION', [
         line('inferra', 'happy', `Ah, ${player}. Just in time. Our ranger has brought back a full notebook and a very big claim.`),
         line('ranger', 'happy', 'Nearly every Databeast in this forest must be nocturnal. You should hear that canopy after dark.'),
+        line('ranger', 'concerned', 'I plan patrols to keep travelers safe. If most creatures are only out at night, that seems the time to watch.'),
         line('ranger', 'neutral', 'I counted 18 Bayowl and 12 Samplet in the canopy, all at night. I know that patrol route well.'),
         line('inferra', 'thoughtful', 'I believe your count. Where did you look in daylight?'),
         line('ranger', 'thoughtful', 'I\'m off duty by then. I know the night route, though.'),
         line('observer', 'thoughtful', 'What about the meadow and riverbank?'),
         line('inferra', 'happy', 'Exactly. Let\'s observe the meadow, riverbank, and canopy in both daylight and moonlight. Six combinations, not one.'),
         line('ranger', 'thoughtful', 'I\'d like to hear what you find. My usual patrol might be missing a few things.'),
+        line('inferra', 'thoughtful', 'Then let\'s find out before we plan around it. Safe patrols need a picture of the places and times travelers actually use.'),
         line('inferra', 'neutral', 'Rest at the campfire to change the time. Record each habitat visit in your DataDex.'),
         line('inferra', 'thoughtful', 'Bring all six records back. Then we can test his claim against a broader sample.'),
       ], 'Review the field assignment');
     }
     case 'inferra-hint': {
       const level = Number.isFinite(context.hintLevel) ? Math.min(3, Math.max(1, Math.floor(context.hintLevel))) : 1;
-      const hints = [
+      let hints = [
         ['The ranger knows the canopy after dark. His notebook is good at telling that story.', 'Which habitats and times are still missing?'],
         ['Compare the same habitat in daylight and moonlight. Then compare it with the other habitats.', 'What would a canopy-only patrol never get a chance to see?'],
         ['If you only look at night, you find the creatures you can see at night.', 'A night-only canopy sample cannot establish that nearly every forest Databeast is nocturnal. That claim needs evidence from the places and times left out.'],
       ];
+      if (context.questStatus === 'ready') {
+        hints = [
+          ['All six records are here. You have the evidence; now we need a finding.', 'Look at the comparison beside the ranger\'s records. Does his patrol describe as much of the forest as your visits do?'],
+          ['Compare the same habitat in daylight and moonlight. Then compare it with the other habitats.', 'Your daytime records show activity outside his night patrol. Which parts of that picture could his canopy-only route capture?'],
+          ['A night-only canopy sample cannot establish that nearly every forest Databeast is nocturnal. It leaves out other habitats and daytime activity.', 'Choose the finding about the original sample\'s limited coverage. Your broader records challenge his claim, but they still cannot tell us how every creature behaves.'],
+        ];
+      } else if (context.questStatus === 'active') {
+        const missing = Array.isArray(context.missingObservations)
+          ? context.missingObservations.filter(label => typeof label === 'string' && label.trim()).map(label => label.trim()) : [];
+        const timeLabel = context.time === 'night' ? 'moonlight' : 'daylight';
+        const nextObservation = missing.find(label => label.toLowerCase().includes(timeLabel)) || missing[0];
+        hints[1] = [
+          'Your DataDex marks the habitat and time combinations you have not recorded yet.',
+          missing.length ? `Still to record: ${missing.join('; ')}.` : 'Check the observation grid for an empty habitat and time combination.',
+        ];
+        hints[2] = context.hintTarget === 'camp' ? [
+          'You have recorded every habitat at this time. Rest at the campfire to change the time; your existing records will stay safe.',
+          missing.length ? `After resting, fill these remaining combinations: ${missing.join('; ')}.` : 'Then visit a habitat with an empty category in the observation grid and choose "Record in DataDex."',
+        ] : [
+          nextObservation ? `Record ${nextObservation} next. Visit that habitat at the time shown in the DataDex.` : 'Visit a habitat with an empty category at the current time in your observation grid.',
+          'Open the habitat and choose "Record in DataDex." Looking at the sightings alone does not save an observation.',
+        ];
+      }
       return conversation('A nudge from Inferra', 'FIELD RESEARCH GUIDANCE', hints[level - 1].map(text => line('inferra', 'thoughtful', text)), 'Return to the evidence');
     }
     case 'inferra-finding-feedback':
@@ -122,6 +179,7 @@ export function getConversation(id, context = {}) {
         line('observer', 'thoughtful', 'What about the creatures we still haven\'t seen?'),
         line('inferra', 'happy', `Good question. Then we keep looking. We haven't seen every creature, and tomorrow could surprise us. You've earned that Sampling Compass, ${player}.`),
         line('ranger', 'happy', 'Next patrol, you\'re welcome to join me. This time we\'ll go while the sun\'s up.'),
+        line('inferra', 'neutral', 'Take your Sampling Compass and six records back to Lyra\'s lab in Harvest Village, along the western path. Your report can help her ask better questions about those rainfall records.'),
       ], 'View your research discovery');
     case 'mastery':
       return conversation('Plan the next expedition', 'OPTIONAL FIELD CHALLENGE', [
