@@ -77,6 +77,23 @@ Open **http://127.0.0.1:4173** in a modern browser. Keep the terminal open while
 
 If this game is already running, `npm.cmd start` prints its existing URL. If another application uses the starting port, the server tries the next available port and prints the correct URL. Use that printed address. `PORT` can set a different starting port; browser saves belong to each exact address, so export/import when changing ports.
 
+## Deploy to Vercel
+
+The root `vercel.json` configures this project as a static site and publishes the ready-to-use `dist/` folder. Commit and push this file to the GitHub branch connected to Vercel, using the collaboration steps above.
+
+In your Vercel project's **Settings → Build and Deployment**, use:
+
+| Setting | Value |
+| --- | --- |
+| Root Directory | Repository root (leave blank or `./`) |
+| Framework Preset | Other |
+| Build Command | Empty (no build step) |
+| Output Directory | `dist` |
+
+The configuration file supplies the framework, build, and output settings. Keep Root Directory at the repository root so Vercel can read it. `npm start` runs the local preview server; Vercel serves the static files directly.
+
+Deploy the new commit, then open the production URL without a trailing comma: **https://thechroniclesofdata.vercel.app/**. Redeploying an older commit will not include the new configuration. If `/dist/index.html` works but `/` returns 404, the deployment is still serving the repository root rather than `dist`.
+
 ## Controls
 
 | Action | Control |
