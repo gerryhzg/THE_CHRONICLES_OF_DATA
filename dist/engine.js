@@ -6,7 +6,7 @@ const SCHEMA_VERSION = 1;
 const move = (id, name, description, power, cost = 0, kind = 'attack') => ({ id, name, description, power, cost, kind });
 const basics = [
   move('observe_strike', 'Measured Strike', 'A reliable attack that costs no Focus.', 7),
-  move('focus_field', 'Focus Field', 'Recover 4 Focus and guard against the next attack.', 4, 0, 'support'),
+  move('focus_field', 'Focus Field', 'Recover up to 4 Focus and guard for this turn.', 4, 0, 'support'),
 ];
 export const SPECIES = {
   creature_statifox: {
@@ -31,7 +31,7 @@ export const SPECIES = {
     id: 'creature_voltkit', name: 'Voltkit', role: 'Electrical offense', type: 'Spark', color: '#e9ce64', symbol: '⚡',
     description: 'A lively grassland creature that stores electrical Flow in its ears. Its recent actions are observations, never guarantees of its next move.',
     habitat: 'Village outskirts / forest meadow', baseHp: 27, power: 6, guard: 3,
-    moves: [move('thunder_spark', 'Thunder Spark', 'Release a crackling electrical attack.', 8), move('charge', 'Charge', 'Gather Focus and brace for an attack.', 4, 0, 'support'), move('lightning_leap', 'Lightning Leap', 'Spend 2 Focus on a powerful leaping attack.', 15, 2), move('static_mend', 'Static Mend', 'Recover 14 HP. Costs 3 Focus.', 14, 3, 'heal')],
+    moves: [move('thunder_spark', 'Thunder Spark', 'Release a crackling electrical attack.', 8), move('charge', 'Charge', 'Recover up to 4 Focus and guard for this turn.', 4, 0, 'support'), move('lightning_leap', 'Lightning Leap', 'Spend 2 Focus on a powerful leaping attack.', 15, 2), move('static_mend', 'Static Mend', 'Recover 14 HP. Costs 3 Focus.', 14, 3, 'heal')],
   },
   creature_samplet: {
     id: 'creature_samplet', name: 'Samplet', role: 'Scouting and speed', type: 'Insight', color: '#8dd5c5', symbol: '🐾',

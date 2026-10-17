@@ -56,7 +56,18 @@ async function click(selector) {
   await eventually(() => evaluate(`(() => { const e = document.querySelector(${JSON.stringify(selector)}); if (!e || e.disabled) return false; e.click(); return true; })()`), `Missing enabled UI control ${selector}`);
   await sleep(75);
 }
-const action = (name, extra = '') => click(`[data-action="${name}"]${extra}`);
+const battleCardActions = new Set(['battle-move', 'guard', 'scan', 'potion', 'bond', 'flee', 'switch']);
+async function showBattleCardCategory(selector) {
+  const category = await evaluate(`document.querySelector(${JSON.stringify(selector)})?.closest('[data-battle-group]')?.dataset.battleGroup`);
+  if (category) await click(`[data-action="battle-category"][data-id="${category}"]`);
+  return category;
+}
+async function action(name, extra = '') {
+  const selector = `[data-action="${name}"]${extra}`;
+  const category = battleCardActions.has(name) ? await showBattleCardCategory(selector) : null;
+  await click(selector);
+  if (category) await click('[data-action="battle-confirm"]');
+}
 const saved = () => evaluate(`JSON.parse(localStorage.getItem(${JSON.stringify(saveKey)}))`);
 const waitHeading = text => eventually(() => evaluate(`document.querySelector('#modal-heading')?.textContent.includes(${JSON.stringify(text)})`), `Dialog did not open: ${text}`);
 
@@ -273,6 +284,207 @@ async function checkBattleRecap(outcome, terminalTurn) {
   } else {
     assert.equal(terminal.at(-1)?.action, 'Escaped', 'Leaving a wild battle must preserve the escape outcome');
     assert.equal(terminal.at(-1)?.side, 'system');
+  }
+}
+
+const battleActionCards = () => evaluate(`([...document.querySelectorAll('.battle-action-card')].map(card => ({
+  action: card.dataset.action, id: card.dataset.id, index: card.dataset.index,
+  group: card.closest('[data-battle-group]')?.dataset.battleGroup,
+  label: card.querySelector('.battle-action-label')?.textContent.trim(),
+  cost: card.querySelector('.battle-action-cost')?.textContent.trim(),
+  effect: card.querySelector('.battle-action-effect')?.textContent.trim(),
+  turn: card.querySelector('.battle-action-turn')?.textContent.trim(),
+  limitation: card.querySelector('.battle-action-limitation')?.textContent.trim(),
+  reason: card.querySelector('.battle-action-reason')?.textContent.trim(),
+  disabled: card.disabled, selected: card.dataset.selected === 'true', pressed: card.getAttribute('aria-pressed'),
+  visible: card.getClientRects().length > 0,
+  reasonVisible: !!card.querySelector('.battle-action-reason')?.getClientRects().length,
+})))`);
+
+async function checkBattleActionLayout(mobile = false, viewportWidth = mobile ? 390 : 1440) {
+  await cdp('Emulation.setDeviceMetricsOverride', { width: viewportWidth, height: mobile ? 844 : 1050, deviceScaleFactor: 1, mobile });
+  await sleep(150);
+  const layout = await evaluate(`(() => {
+    const rect = element => { const r = element.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom }; };
+    const cards = [...document.querySelectorAll('.battle-action-card')].filter(card => card.getClientRects().length);
+    const preview = document.querySelector('.battle-action-preview');
+    if (!preview) return null;
+    return { fits: document.documentElement.scrollWidth <= innerWidth, preview: rect(preview),
+      confirm: rect(preview.querySelector('[data-action="battle-confirm"]')),
+      previewOverflow: preview.scrollWidth > preview.clientWidth + 1,
+      cards: cards.map(card => ({ ...rect(card), text: card.textContent.trim(), overflow: card.scrollWidth > card.clientWidth + 1,
+        textEscapes: [...card.querySelectorAll('.battle-action-label, .battle-action-description, .battle-action-cost, .battle-action-effect, .battle-action-turn, .battle-action-limitation, .battle-action-reason')].some(text => {
+          const bounds = rect(text), cardBounds = rect(card);
+          return bounds.left < cardBounds.left - 1 || bounds.right > cardBounds.right + 1 || bounds.top < cardBounds.top - 1 || bounds.bottom > cardBounds.bottom + 1;
+        }),
+      })),
+    };
+  })()`);
+  const mode = `${mobile ? 'Mobile' : 'Desktop'} (${viewportWidth}px)`;
+  assert.ok(layout?.cards.length, `${mode} battle actions must show cards and a preview`);
+  assert.equal(layout.fits || false, true, `${mode} action menu must fit horizontally`);
+  assert.equal(layout.previewOverflow, false, `${mode} selected-action preview must not overflow`);
+  assert.ok(layout.confirm.left >= layout.preview.left - 1 && layout.confirm.right <= layout.preview.right + 1 && layout.confirm.top >= layout.preview.top - 1 && layout.confirm.bottom <= layout.preview.bottom + 1, `${mode} confirm control must fit inside its preview`);
+  const overlaps = (a, b) => Math.min(a.right, b.right) - Math.max(a.left, b.left) > 1 && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 1;
+  for (const [index, card] of layout.cards.entries()) {
+    assert.equal(card.overflow || card.textEscapes, false, `${mode} action explanations must stay inside the card: ${card.text}`);
+    assert.equal(overlaps(card, layout.preview), false, `${mode} action cards must not overlap their preview`);
+    for (const next of layout.cards.slice(index + 1)) assert.equal(overlaps(card, next), false, `${mode} action cards must not overlap one another`);
+  }
+}
+
+async function checkBattleActionMenu() {
+  const original = await saved();
+  const inject = async fixture => {
+    await evaluate(`localStorage.setItem(${JSON.stringify(saveKey)}, ${JSON.stringify(serializeGame(fixture))})`);
+    await reloadGame();
+    await waitHeading(fixture.battle.kind === 'wild' ? 'Wild Voltkit encounter' : 'friendly challenge');
+  };
+  const disabledReason = async (actionName, extra, reason) => {
+    const selector = `.battle-action-card[data-action="${actionName}"]${extra}`;
+    await showBattleCardCategory(selector);
+    const card = (await battleActionCards()).find(card => card.action === actionName && (extra.includes('data-id') ? extra.includes(`"${card.id}"`) : extra.includes('data-index') ? extra.includes(`"${card.index}"`) : true));
+    assert.ok(card?.disabled && card.reasonVisible, `Unavailable ${actionName} must be disabled with a visible reason`);
+    assert.match(card.reason, reason, `Unavailable ${actionName} must explain its restriction`);
+    return selector;
+  };
+  try {
+    let fixture = act(createGame(), { type: 'CHOOSE_STARTER', speciesId: 'creature_statifox' }).state;
+    for (const [speciesId, hp] of [['creature_algobear', 40], ['creature_terradeer', 0]]) {
+      fixture.party.push({ uid: `action-qa-${speciesId}`, speciesId, hp, maxHp: SPECIES[speciesId].baseHp + 15, focus: 4, level: 5, xp: 0 });
+      fixture.dex.species[speciesId].seen = true;
+      fixture.dex.species[speciesId].recruited = true;
+    }
+    fixture = act(fixture, { type: 'START_BATTLE', kind: 'rival' }).state;
+    await inject(fixture);
+    const beforeSelection = await saved();
+    assert.equal((await battleActionCards()).filter(card => card.selected).length, 0, 'A new encounter must wait for the player to choose an action');
+    assert.equal(await evaluate(`document.querySelector('[data-action="battle-confirm"]')?.disabled`), true, 'Confirm must be unavailable until an action is selected');
+    for (const category of ['skills', 'commands', 'party']) {
+      await click(`[data-action="battle-category"][data-id="${category}"]`);
+      assert.equal(await evaluate(`document.querySelector('[data-action="battle-category"][data-id="${category}"]').getAttribute('aria-pressed')`), 'true', 'The active action category must be identified');
+      const cards = (await battleActionCards()).filter(card => card.visible);
+      assert.ok(cards.length && cards.every(card => card.group === category), 'Only the current category must display action cards');
+      for (const card of cards) {
+        assert.ok(card.label && card.cost && card.effect && card.turn, `Every action must explain its name, resource cost, effect and turn rule before selection: ${card.action}`);
+        if (card.disabled) assert.ok(card.reason && card.reasonVisible, 'Disabled actions must explain why they are unavailable');
+      }
+      await checkBattleActionLayout();
+      await checkBattleActionLayout(true);
+      await checkBattleActionLayout(true, 320);
+    }
+    assert.deepEqual(await saved(), beforeSelection, 'Browsing action categories must not change battle progress');
+    const explained = await battleActionCards();
+    assert.match(explained.find(card => card.id === 'pattern_pulse').cost, /2.*Focus|Focus.*2/i, 'Pattern Pulse must state its actual Focus cost');
+    assert.match(explained.find(card => card.id === 'pattern_pulse').effect, /15/, 'Attacks must state their power');
+    assert.match(explained.find(card => card.action === 'scan').turn, /free|no turn|0 turn/i, 'Scanning must explicitly explain that it costs no turn');
+    assert.match(explained.find(card => card.action === 'potion').effect, /30.*HP|HP.*30/i, 'Potions must explain their healing limit');
+    const fullHpHeal = explained.find(card => card.id === 'quiet_recovery');
+    assert.match(fullHpHeal.effect, /0 HP/i, 'A healing move at full HP must explain its actual zero healing');
+    assert.match(fullHpHeal.limitation, /full HP/i, 'A healing move at full HP must explain the limitation');
+    await disabledReason('potion', '', /full|maximum/i);
+    await disabledReason('switch', '[data-index="0"]', /active|current|already/i);
+    await disabledReason('switch', '[data-index="2"]', /faint|rest|0 HP/i);
+    await disabledReason('bond', '', /Kai|rival|friendly|wild/i);
+    await disabledReason('flee', '', /Kai|rival|friendly/i);
+
+    const skill = '.battle-action-card[data-action="battle-move"][data-id="pattern_pulse"]';
+    await showBattleCardCategory(skill);
+    const beforeStyle = await evaluate(`(() => { const style = getComputedStyle(document.querySelector(${JSON.stringify(skill)})); window.__actionPreview = document.querySelector('.battle-action-preview'); return { border: style.borderColor, background: style.backgroundColor }; })()`);
+    await click(skill);
+    let selected = (await battleActionCards()).filter(card => card.selected);
+    assert.equal(selected.length, 1, 'Selecting a card must highlight exactly one action');
+    assert.equal(selected[0].id, 'pattern_pulse');
+    assert.equal(selected[0].pressed, 'true', 'Selected cards must expose their pressed state');
+    assert.deepEqual(await saved(), beforeSelection, 'Selecting a move must not spend Focus, HP, items or a turn');
+    const preview = await evaluate(`(() => {
+      const card = document.querySelector(${JSON.stringify(skill)}), preview = document.querySelector('.battle-action-preview'), style = getComputedStyle(card);
+      return { text: preview.textContent.trim(), live: preview.getAttribute('aria-live'), stable: preview === window.__actionPreview, confirmEnabled: !preview.querySelector('[data-action="battle-confirm"]').disabled, border: style.borderColor, background: style.backgroundColor };
+    })()`);
+    assert.equal(preview.live, 'polite', 'The selected action preview must announce changes accessibly');
+    assert.equal(preview.stable, true, 'Selecting an action must update the existing live preview');
+    assert.equal(preview.confirmEnabled, true, 'A selected available action must enable confirmation');
+    for (const text of [selected[0].label, selected[0].cost, selected[0].effect, selected[0].turn]) assert.ok(preview.text.includes(text), 'The preview must explain the selected action before confirmation');
+    assert.ok(preview.border !== beforeStyle.border || preview.background !== beforeStyle.background, 'A selected action must have visible styling feedback');
+    await checkBattleActionLayout();
+    await evaluate(`document.querySelector('.battle-action-menu').scrollIntoView({ block: 'start', behavior: 'instant' })`);
+    await screenshot('battle-actions-desktop.png');
+    await checkBattleActionLayout(true);
+    await evaluate(`document.querySelector('.battle-action-card[data-selected="true"]').scrollIntoView({ block: 'start', behavior: 'instant' })`);
+    await screenshot('battle-actions-mobile.png', true);
+    await evaluate(`document.querySelector('.battle-action-preview').scrollIntoView({ block: 'start', behavior: 'instant' })`);
+    await screenshot('battle-actions-preview-mobile.png', true);
+    await checkBattleActionLayout(true, 320);
+
+    const guard = '.battle-action-card[data-action="guard"]';
+    await showBattleCardCategory(guard);
+    await click(guard);
+    selected = (await battleActionCards()).filter(card => card.selected);
+    assert.equal(selected.length, 1);
+    assert.equal(selected[0].action, 'guard', 'Choosing another card must replace the selection');
+    assert.deepEqual(await saved(), beforeSelection, 'Changing the selected action must not advance battle');
+    await click('[data-action="battle-clear"]');
+    assert.equal((await battleActionCards()).filter(card => card.selected).length, 0, 'Cancelling must clear the selected action');
+    assert.deepEqual(await saved(), beforeSelection, 'Cancelling a selection must preserve all battle resources');
+    const basic = '.battle-action-card[data-action="battle-move"][data-id="observe_strike"]';
+    await showBattleCardCategory(basic);
+    await evaluate(`document.querySelector(${JSON.stringify(basic)}).focus()`);
+    await pressKey('Enter', 'Enter', 13);
+    await pressKey('Enter', 'Enter', 13);
+    assert.equal((await battleActionCards()).find(card => card.selected)?.id, 'observe_strike', 'Keyboard activation must select the focused move');
+    assert.deepEqual(await saved(), beforeSelection, 'Repeated keyboard selection must not execute a move');
+    for (let count = 0; count < 12 && !await evaluate(`document.activeElement?.dataset.action === 'battle-confirm'`); count++) await pressKey('Tab', 'Tab', 9);
+    assert.equal(await evaluate(`document.activeElement?.dataset.action`), 'battle-confirm', 'Keyboard users must be able to Tab from a selected card to confirm');
+    await pressKey('Enter', 'Enter', 13);
+    await evaluate(`document.querySelector('[data-action="battle-confirm"]').click(); document.querySelector('[data-action="battle-confirm"]').click()`);
+    assert.deepEqual(await saved(), act(beforeSelection, { type: 'BATTLE_MOVE', moveId: 'observe_strike' }).state, 'Confirmation must execute the selected move exactly once');
+    assert.equal((await battleActionCards()).filter(card => card.selected).length, 0, 'Execution must clear the old selection');
+    assert.equal(await evaluate(`document.querySelector('[data-action="battle-confirm"]').disabled`), true, 'A second action must need a fresh selection');
+    await action('scan');
+    await disabledReason('scan', '', /already|scanned/i);
+
+    const limited = structuredClone(fixture);
+    limited.party[0].hp -= 12;
+    limited.party[0].focus = 0;
+    limited.inventory.potions = 0;
+    limited.inventory.bondCrystals = 0;
+    await inject(limited);
+    const unavailableMove = await disabledReason('battle-move', '[data-id="pattern_pulse"]', /Focus|need|require/i);
+    await disabledReason('battle-move', '[data-id="quiet_recovery"]', /Focus|need|require/i);
+    await disabledReason('potion', '', /no|0|empty|stock/i);
+    const blockedState = await saved();
+    await evaluate(`document.querySelector(${JSON.stringify(unavailableMove)}).click()`);
+    assert.deepEqual(await saved(), blockedState, 'An unavailable action must not change the game');
+    assert.equal((await battleActionCards()).filter(card => card.selected).length, 0, 'An unavailable action must not become selected');
+    assert.ok((await battleActionCards()).find(card => card.action === 'guard' && !card.disabled), 'Guard must remain available when Focus is empty');
+    assert.ok((await battleActionCards()).find(card => card.id === 'observe_strike' && !card.disabled), 'The free basic attack must remain available when Focus is empty');
+
+    limited.battle = null;
+    limited.flags.rivalDefeated = true;
+    limited.quests.firstBond.status = 'complete';
+    const wild = act(limited, { type: 'START_BATTLE', kind: 'wild' }).state;
+    await inject(wild);
+    await disabledReason('bond', '', /crystal|no|0|stock/i);
+    assert.ok((await battleActionCards()).find(card => card.action === 'flee' && !card.disabled), 'Leaving must be available during a wild encounter');
+    const full = structuredClone(wild);
+    full.inventory.bondCrystals = 5;
+    const speciesId = 'creature_samplet';
+    const maxHp = SPECIES[speciesId].baseHp + 15;
+    full.party.push({ uid: 'action-qa-full-party', speciesId, hp: maxHp, maxHp, focus: 8, level: 5, xp: 0 });
+    full.dex.species[speciesId].seen = true;
+    full.dex.species[speciesId].recruited = true;
+    await inject(full);
+    await disabledReason('bond', '', /party|full|four|4/i);
+    let solo = act(createGame(), { type: 'CHOOSE_STARTER', speciesId: 'creature_statifox' }).state;
+    solo = act(solo, { type: 'START_BATTLE', kind: 'rival' }).state;
+    await inject(solo);
+    await disabledReason('switch', '[data-index="0"]', /already|active|another/i);
+    assert.match((await battleActionCards()).find(card => card.action === 'switch').limitation, /another healthy/i, 'A lone companion must explain why switching is unavailable');
+    checks.push('Battle action menu: category explanations, visible costs/effects/turn rules, two-step mouse/keyboard selection and confirmation, unchanged resources before confirm, single execution, selected feedback, full HP/low Focus/empty supplies/current or fainted companion/rival/full-party restrictions, desktop/390px/320px fit');
+  } finally {
+    await evaluate(`localStorage.setItem(${JSON.stringify(saveKey)}, ${JSON.stringify(JSON.stringify(original))})`);
+    await cdp('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1050, deviceScaleFactor: 1, mobile: false });
+    await reloadGame();
   }
 }
 
@@ -567,6 +779,7 @@ try {
   await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
   await eventually(() => evaluate(`!document.querySelector('#modal-root .modal')`), 'Escape must close DataDex');
   checks.push('Responsive layout, WASD D movement, DataDex X shortcut, modal keyboard focus and Escape');
+  await checkBattleActionMenu();
   await checkBattleMessages();
   console.log('Initial desktop and mobile screenshots ready. Starting full Stage 1 walkthrough.');
 
@@ -841,7 +1054,7 @@ try {
   checks.push('Sanctuary healing/restocking, DataDex field notes, export/new journey/import, final reload');
   await screenshot('completed.png');
   assert.deepEqual(errors, [], 'Browser runtime must have no errors');
-  await writeFile(resolve(artifactDir, 'browser-smoke.json'), JSON.stringify({ status: 'passed', url, checks, errors, screenshots: ['dialogue.png', 'dialogue-mobile.png', 'battle-desktop.png', 'battle-mobile.png', 'inferra-dialogue.png', 'inferra-mobile.png', 'quest-journal.png', 'quest-journal-mobile.png', 'prototype.png', 'mobile.png', 'completed.png'] }, null, 2));
+  await writeFile(resolve(artifactDir, 'browser-smoke.json'), JSON.stringify({ status: 'passed', url, checks, errors, screenshots: ['dialogue.png', 'dialogue-mobile.png', 'battle-desktop.png', 'battle-mobile.png', 'battle-actions-desktop.png', 'battle-actions-mobile.png', 'battle-actions-preview-mobile.png', 'inferra-dialogue.png', 'inferra-mobile.png', 'quest-journal.png', 'quest-journal-mobile.png', 'prototype.png', 'mobile.png', 'completed.png'] }, null, 2));
   console.log(JSON.stringify({ status: 'passed', checks, errors }, null, 2));
 } catch (error) {
   errors.push(error.stack || error.message);

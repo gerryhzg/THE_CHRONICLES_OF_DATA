@@ -4,6 +4,7 @@ import { getConversation, createDialogue, currentSegment, advanceDialogue, previ
 import { resolveSpeaker, portraitMarkup } from './portraits.js';
 import { createSpeechController } from './speech.js';
 import { getQuestGuide, getJourneySteps, getMissingObservations } from './quests.js';
+import { getBattleActions } from './battle-actions.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -34,6 +35,11 @@ let lastStep = 0;
 let lastDraw = 0;
 let toastTimer;
 let battleLogObserver = null;
+let battleSelection = null;
+let battleCategory = 'skills';
+let battleFeedback = '';
+const battleCommandButtons = new Set(['battle-move','guard','scan','potion','bond','flee','switch']);
+const heldBattleKeys = new Set();
 let dexTab = 'creatures';
 let sound = false;
 let audioContext;
@@ -134,6 +140,8 @@ function dispatch(action, {quiet = false} = {}) {
   try {
     const result = act(state, action);
     state = result.state;
+    if (action.type==='START_BATTLE') {battleSelection=null;battleCategory='skills';battleFeedback='';}
+    else if (action.type.startsWith('BATTLE_')) {battleSelection=null;battleFeedback=result.events?.[0]||'Action complete.';}
     persist();
     updateUI();
     if (!quiet && result.events?.length) toast(result.events[result.events.length - 1]);
@@ -278,6 +286,8 @@ function openDialogue(title, subtitle, text, conversationId, options = {}) {
 }
 function openModal(type, data = {}) {
   if (!modal) returnFocus=document.activeElement;
+  battleSelection=null;
+  if (type==='battle') battleFeedback='';
   path=[]; pathTarget=null; modal=type; modalData=data;
   activeDialogue=prepareDialogue(type,data);
   if (activeDialogue && data.resumeDialogue) activeDialogue={...activeDialogue,index:activeDialogue.conversation.segments.length-1};
@@ -439,6 +449,7 @@ function renderModal({resetFocus=false} = {}) {
     if ($('dialogue-announcer').textContent!==announcement) $('dialogue-announcer').textContent=announcement;
   } else {
     if (!resetFocus) focusable=logFocused?root.querySelector('.battle-log'):[...root.querySelectorAll('button:not(:disabled)')].find(button=>button.dataset.action===previousAction&&(!previousId||button.dataset.id===previousId)&&(!previousIndex||button.dataset.index===previousIndex));
+    if (modal==='battle'&&previousAction==='battle-confirm') focusable ||= root.querySelector('[data-battle-group]:not([hidden]) .battle-action-card:not(:disabled)');
     focusable ||= root.querySelector('input, button:not(:disabled), [tabindex="0"]');
     $('dialogue-announcer').textContent='';
   }
@@ -535,22 +546,81 @@ function battleCombatant(member,side) {
   </section>`;
 }
 
+function battleActionCard(command) {
+  const selected=command.key===battleSelection;
+  const actionName=command.action.type==='BATTLE_MOVE'?'battle-move':command.action.type.slice(7).toLowerCase();
+  return `<button class="battle-action-card" data-action="${actionName}" data-key="${esc(command.key)}" ${command.action.moveId?`data-id="${esc(command.action.moveId)}"`:''} ${command.action.index!==undefined?`data-index="${command.action.index}"`:''} data-selected="${selected}" aria-pressed="${selected}" aria-controls="battle-action-preview" ${command.available?'':'disabled'}>
+    <span class="battle-action-card-top"><span class="battle-action-category">${esc(command.category)}</span><span class="battle-action-availability">${selected?'✓ Selected':command.available?'Ready':'Unavailable'}</span></span>
+    <strong class="battle-action-label">${esc(command.label)}</strong>
+    <span class="battle-action-description">${esc(command.description)}</span>
+    <span class="battle-action-effect">${esc(command.effect)}</span>
+    <span class="battle-action-cost">${esc(command.cost)}</span>
+    <span class="battle-action-turn">${esc(command.turn)}</span>
+    ${command.limitation?`<span class="battle-action-limitation">${esc(command.limitation)}</span>`:''}
+    ${command.unavailableReason?`<span class="battle-action-reason">${esc(command.unavailableReason)}</span>`:''}
+  </button>`;
+}
+
+function battleActionPreview(command) {
+  if (!command) return `<span class="battle-preview-step">2 · Review & use</span><h4>Choose an action</h4><p>Select a card to review its effect. The action runs only when you press Use.</p><button class="primary-button" data-action="battle-confirm" disabled>Choose an action first</button>`;
+  const confirmLabel=command.key==='flee'?'Leave encounter':command.group==='party'?command.label:`Use ${command.label}`;
+  return `<span class="battle-preview-step">2 · Review & use</span><h4>${esc(command.label)}</h4><p>${esc(command.description)}</p>
+    <dl><div><dt>Effect</dt><dd>${esc(command.effect)}</dd></div><div><dt>Cost</dt><dd>${esc(command.cost)}</dd></div><div><dt>Timing</dt><dd>${esc(command.turn)}</dd></div>${command.limitation?`<div><dt>Keep in mind</dt><dd>${esc(command.limitation)}</dd></div>`:''}</dl>
+    ${command.unavailableReason?`<p class="battle-action-reason">${esc(command.unavailableReason)}</p>`:''}
+    <div class="battle-confirm-controls"><button class="primary-button" data-action="battle-confirm" ${command.available?'':'disabled'}>${esc(confirmLabel)}</button><button class="secondary-button" data-action="battle-clear">Cancel selection</button></div>`;
+}
+
+function updateBattleSelection() {
+  const command=getBattleActions(state).find(action=>action.key===battleSelection);
+  const root=$('modal-root');
+  root.querySelectorAll('.battle-action-card').forEach(card=>{
+    const selected=card.dataset.key===battleSelection;
+    card.dataset.selected=String(selected);
+    card.setAttribute('aria-pressed',String(selected));
+    card.querySelector('.battle-action-availability').textContent=selected?'✓ Selected':card.disabled?'Unavailable':'Ready';
+  });
+  const preview=root.querySelector('.battle-action-preview');
+  if (preview) preview.innerHTML=battleActionPreview(command);
+}
+
+function selectBattleAction(button, pointer=false) {
+  const command=getBattleActions(state).find(action=>action.key===button.dataset.key);
+  if (!command?.available) return;
+  battleSelection=command.key;
+  updateBattleSelection();
+  if (pointer&&window.matchMedia('(max-width:760px)').matches) $('modal-root').querySelector('.battle-action-preview')?.scrollIntoView({block:'nearest',behavior:'instant'});
+}
+
+function confirmBattleAction() {
+  // Rebuild from current battle state before spending resources or resolving a turn.
+  const command=getBattleActions(state).find(action=>action.key===battleSelection);
+  if (!command?.available) {battleSelection=null;updateBattleSelection();return;}
+  dispatch(command.action,{quiet:true});
+}
+
+function battleActionMenu(player) {
+  const commands=getBattleActions(state);
+  const categories=[['skills','Skills'],['commands','Tactics & supplies'],['party','Switch partner']];
+  const selected=commands.find(command=>command.key===battleSelection);
+  return `<section class="battle-action-menu" aria-labelledby="battle-actions-title">
+    <div class="battle-action-intro"><div><p class="battle-preview-step">1 · Choose a command</p><h3 id="battle-actions-title">What will ${esc(creatureName(player.speciesId))} do?</h3><p>The enemy waits while you choose. Review a card, then press Use.</p></div><span class="battle-focus">${player.focus} / 8 Focus</span></div>
+    <p class="battle-action-feedback" role="status" ${battleFeedback?'':'hidden'}>${esc(battleFeedback)}</p>
+    <div class="battle-action-categories" role="group" aria-label="Battle command categories">${categories.map(([key,label])=>`<button data-action="battle-category" data-id="${key}" aria-pressed="${battleCategory===key}" aria-controls="battle-group-${key}">${label}<span>${commands.filter(command=>command.group===key&&command.available).length} ready</span></button>`).join('')}</div>
+    ${categories.map(([key,label])=>`<section id="battle-group-${key}" data-battle-group="${key}" aria-label="${label}" ${battleCategory===key?'':'hidden'}><div class="battle-action-grid">${commands.filter(command=>command.group===key).map(battleActionCard).join('')}</div></section>`).join('')}
+  </section><aside class="battle-decision"><div class="battle-action-preview" id="battle-action-preview" aria-live="polite" aria-atomic="true">${battleActionPreview(selected)}</div></aside>`;
+}
+
 function battleModal() {
   const b=state.battle;
   if (!b) { modal='battle-result'; return modalShell('Encounter complete','FIELD JOURNAL','<p>The encounter has ended. Continue your adventure.</p><button class="primary-button" data-action="close">Continue</button>'); }
   const player=state.party[b.activeIndex]; const enemy=b.enemy;
-  const moves=SPECIES[player.speciesId].moves;
   const history=b.enemyHistory || [];
   const moveCounts={}; history.forEach(m=>{ const name=typeof m==='string'?m:m.moveName||m.name||m.moveId||'an action'; moveCounts[name]=(moveCounts[name]||0)+1; });
   const summary=Object.entries(moveCounts).map(([name,count])=>`${name}: ${count}/${history.length} observed turns`).join(' · ');
   return modalShell(b.kind==='rival'?'Kai’s friendly challenge':'Wild Voltkit encounter',`TURN ${b.turn} · ${b.kind==='rival'?'LEARN TOGETHER':'A CHANCE TO BOND'}`,`
     <div class="battle-stage">${battleCombatant(player,'player')}${battleCombatant(enemy,'enemy')}</div>
     ${battleTimeline(b.log||[])}
-    <div class="battle-body"><div><h3>What will ${esc(creatureName(player.speciesId))} do?</h3>
-      <div class="move-grid">${moves.map(m=>`<button class="move-button" data-action="battle-move" data-id="${esc(m.id)}" ${m.cost>player.focus?'disabled':''}>${esc(m.name)}<small>${esc(m.description || (m.power?'Power '+m.power:'Support'))}${m.cost?' · '+m.cost+' Focus':''}</small></button>`).join('')}<button class="move-button" data-action="guard">Guard<small>Reduce damage · recover Focus</small></button></div>
-      <div class="battle-tools"><button data-action="scan" ${b.scanned?'disabled':''}>${b.scanned?'✓ Scanned':'▧ Scan · free'}</button><button data-action="potion" ${state.inventory.potions<1?'disabled':''}>♧ Potion · ${state.inventory.potions}</button>${b.kind==='wild'?`<button class="bond" data-action="bond" ${state.inventory.bondCrystals<1?'disabled':''}>◇ Bond · ${state.inventory.bondCrystals}</button><button data-action="flee">Leave</button>`:''}</div>
-      ${state.party.length>1?`<div class="switch-list">${state.party.map((c,i)=>`<button data-action="switch" data-index="${i}" ${i===b.activeIndex||c.hp<=0?'disabled':''}>Switch to ${esc(creatureName(c.speciesId))} · ${c.hp} HP</button>`).join('')}</div>`:''}
-    </div><div><h3>Encounter notes</h3><div class="battle-note">${b.scanned?`DataDex scan: ${summary?esc(summary)+'. ':''}Observed frequencies describe these turns. They do not guarantee the next move.`:'Your first scan is free. Observe behavior before choosing a strategy.'}${b.kind==='wild'?'<br>Bonding improves after a scan and at low HP. Avoid defeating it before using a crystal.':''}</div></div></div>`,{wide:true,battle:true});
+    <div class="battle-body">${battleActionMenu(player)}<details class="battle-help"><summary>Observation & bonding tips</summary><p class="battle-note">${b.scanned?`DataDex scan: ${summary?esc(summary)+'. ':''}Observed frequencies describe these turns. They do not guarantee the next move.`:'Your first scan is free. Observe behavior before choosing a strategy.'}${b.kind==='wild'?'<br>Bonding improves after a scan and at low HP. Avoid defeating it before using a crystal.':''}</p></details></div>`,{wide:true,battle:true});
 }
 
 function dexModal() {
@@ -589,13 +659,18 @@ $('modal-root').addEventListener('click',event=>{
   else if (a==='begin') { const name=$('observer-name').value.trim()||'Observer'; if (dispatch({type:'SET_NAME',name},{quiet:true})) openModal('starters'); }
   else if (a==='choose') { if(dispatch({type:'CHOOSE_STARTER',speciesId:button.dataset.id})){closeModal();chime('success');} }
   else if (a==='start-battle') { if(dispatch({type:'START_BATTLE',kind:button.dataset.kind},{quiet:true}))openModal('battle'); }
-  else if (a==='battle-move') dispatch({type:'BATTLE_MOVE',moveId:button.dataset.id},{quiet:true});
-  else if (a==='guard') dispatch({type:'BATTLE_GUARD'},{quiet:true});
-  else if (a==='scan') dispatch({type:'BATTLE_SCAN'},{quiet:true});
-  else if (a==='potion') dispatch({type:'BATTLE_POTION'},{quiet:true});
-  else if (a==='bond') dispatch({type:'BATTLE_BOND'},{quiet:true});
-  else if (a==='flee') dispatch({type:'BATTLE_FLEE'},{quiet:true});
-  else if (a==='switch') dispatch({type:'BATTLE_SWITCH',index:Number(button.dataset.index)},{quiet:true});
+  else if (battleCommandButtons.has(a)) selectBattleAction(button,event.detail>0);
+  else if (a==='battle-confirm') confirmBattleAction();
+  else if (a==='battle-clear') {
+    const selected=$('modal-root').querySelector('.battle-action-card[data-selected="true"]');
+    battleSelection=null;updateBattleSelection();selected?.focus({preventScroll:true});
+  }
+  else if (a==='battle-category') {
+    battleCategory=button.dataset.id;battleSelection=null;
+    $('modal-root').querySelectorAll('[data-battle-group]').forEach(group=>{group.hidden=group.dataset.battleGroup!==battleCategory;});
+    $('modal-root').querySelectorAll('[data-action="battle-category"]').forEach(category=>category.setAttribute('aria-pressed',String(category.dataset.id===battleCategory)));
+    updateBattleSelection();
+  }
   else if (a==='heal') dispatch({type:'HEAL_PARTY'});
   else if (a==='restock') dispatch({type:'RESTOCK'});
   else if (a==='start-investigation') { if(dispatch({type:'START_INVESTIGATION'},{quiet:true}))openModal('investigation'); }
@@ -664,6 +739,13 @@ $('world').addEventListener('click',event=>{
 
 document.addEventListener('keydown',event=>{
   if(modal){
+    if (modal==='battle'&&!event.ctrlKey&&!event.metaKey&&!event.altKey&&['Enter',' '].includes(event.key)) {
+      const action=event.target.closest('button')?.dataset.action;
+      if (battleCommandButtons.has(action)||action==='battle-confirm') {
+        if (event.repeat||heldBattleKeys.has(event.key)) {event.preventDefault();return;}
+        heldBattleKeys.add(event.key);
+      }
+    }
     if (activeDialogue && !event.ctrlKey && !event.metaKey && !event.altKey && !/INPUT|TEXTAREA|SELECT/.test(event.target.tagName)) {
       const key=event.key.toLowerCase();
       if (['enter',' ','e'].includes(key)) {
@@ -681,7 +763,7 @@ document.addEventListener('keydown',event=>{
     }
     if(event.key==='Escape'){event.preventDefault();closeModal();}
     if(event.key==='Tab'){
-      const items=[...$('modal-root').querySelectorAll('button:not(:disabled),input:not(:disabled),[tabindex="0"]')];
+      const items=[...$('modal-root').querySelectorAll('button:not(:disabled),input:not(:disabled),summary,[tabindex="0"]')].filter(element=>element.getClientRects().length>0);
       const first=items[0],last=items[items.length-1];
       if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus();}
       else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus();}
@@ -697,8 +779,8 @@ document.addEventListener('keydown',event=>{
   else if(event.key==='p'||event.key==='P'){event.preventDefault();openModal('save');}
   else if(event.key==='x'||event.key==='X'){event.preventDefault();openModal('dex');}
 });
-document.addEventListener('keyup',event=>heldDialogueKeys.delete(event.key.toLowerCase()));
-window.addEventListener('blur',()=>heldDialogueKeys.clear());
+document.addEventListener('keyup',event=>{heldDialogueKeys.delete(event.key.toLowerCase());heldBattleKeys.delete(event.key);});
+window.addEventListener('blur',()=>{heldDialogueKeys.clear();heldBattleKeys.clear();});
 
 $('dex-button').addEventListener('click',()=>openModal('dex'));
 $('save-button').addEventListener('click',()=>openModal('save'));
