@@ -33,6 +33,7 @@ let pathTarget = null;
 let lastStep = 0;
 let lastDraw = 0;
 let toastTimer;
+let battleLogObserver = null;
 let dexTab = 'creatures';
 let sound = false;
 let audioContext;
@@ -140,7 +141,7 @@ function dispatch(action, {quiet = false} = {}) {
       const won = before.battle.kind === 'rival' && (result.events || []).some(event => event.startsWith('Kai:'));
       const recruited = !before.flags.recruitedVoltkit && state.flags.recruitedVoltkit;
       modal = 'battle-result';
-      modalData = {won, recruited, events:result.events || [],kind:before.battle.kind};
+      modalData = {won, recruited, events:result.events || [],kind:before.battle.kind,battleEvents:result.battleEvents || []};
       activeDialogue = prepareDialogue(modal,modalData);
       chime(won || recruited ? 'success' : 'action');
     }
@@ -288,6 +289,8 @@ function closeModal() {
     toast('Finish this encounter, or flee from a wild battle.'); return;
   }
   speech.sync(null);
+  battleLogObserver?.disconnect();
+  battleLogObserver=null;
   modal=null; modalData={}; activeDialogue=null; $('modal-root').innerHTML=''; $('dialogue-announcer').textContent=''; updatePrompt();
   if (returnFocus?.isConnected) returnFocus.focus({preventScroll:true}); else $('world').focus({preventScroll:true});
 }
@@ -375,7 +378,8 @@ function conversationModal() {
   const conversation=activeDialogue.conversation;
   const title=modalData.title || titles[modal] || conversation.title;
   const subtitle=modalData.subtitle || conversation.subtitle;
-  return modalShell(title,subtitle,dialogueMarkup()+conversationActions(),{wide:modal==='starters'});
+  const battleRecap=modal==='battle-result'&&modalData.battleEvents?.length?battleTimeline(modalData.battleEvents,true):'';
+  return modalShell(title,subtitle,dialogueMarkup()+battleRecap+conversationActions(),{wide:modal==='starters'||modal==='battle-result'});
 }
 
 function moveDialogue(direction) {
@@ -394,6 +398,10 @@ function renderModal({resetFocus=false} = {}) {
   const previousControl=document.activeElement?.closest('#modal-root button[data-action]');
   const previousAction=resetFocus?undefined:previousControl?.dataset.action;
   const previousId=previousControl?.dataset.id;
+  const previousIndex=previousControl?.dataset.index;
+  const previousLog=$('modal-root').querySelector('.battle-log');
+  const logFocused=!resetFocus&&document.activeElement===previousLog;
+  const logPosition=!resetFocus&&previousLog&&previousLog.scrollHeight-previousLog.scrollTop-previousLog.clientHeight>8?previousLog.scrollTop:null;
   let html='';
   if (modal === 'welcome') {
     html=modalShell('Every adventure begins with a question.','WELCOME, OBSERVER',`<div class="welcome-art"><span class="diamond">✧</span>${portrait('creature_statifox')}${portrait('creature_algobear')}${portrait('creature_terradeer')}</div><div class="forecast-strip"><div><span>ORACLE FORECAST · DAY 127</span><strong>0 mm</strong></div><div><span>ACTUAL RAINFALL</span><strong class="rain">46 mm</strong></div><div><span>ARCHIVE STATUS</span><strong style="font-size:17px">“Perfect.”</strong></div></div><p>The Oracle promised dry skies. Rain drums on Harvest Village's roofs. In her lab, Professor Lyra weighs a perfect forecast against a very wet notebook.</p><label class="name-label" for="observer-name">What should we call you?</label><input id="observer-name" class="text-input" autocomplete="nickname" maxlength="24" value="Observer" placeholder="Your name"><div class="modal-actions"><button class="primary-button" data-action="begin">Begin your journey <span>→</span></button><button class="secondary-button" data-action="close">Explore the village</button></div><p class="save-info">A short, complete prototype adventure. Progress saves in this browser after every action.</p>`);
@@ -415,6 +423,8 @@ function renderModal({resetFocus=false} = {}) {
   } else if (modal === 'help') {
     html=modalShell('Your first field guide','THE CHRONICLES OF DATA · STAGE 1',`<p>Explore a small original RPG world, form a team, and uncover a misleading claim by collecting evidence. You can complete the investigation with any starter.</p><table class="control-table"><tr><td>Walk</td><td>WASD / arrow keys / click map</td></tr><tr><td>Talk, observe, or enter</td><td>E / Space / click a place</td></tr><tr><td>Open DataDex</td><td>X</td></tr><tr><td>Save & load</td><td>P</td></tr><tr><td>Close a dialog</td><td>Escape</td></tr></table><p>Choose a companion in Lyra’s lab, battle Kai, then enter the forest from the eastern gate. Speak to Inferra and observe each habitat by day and night. Rest at the campfire to change time.</p><p>Visit the sanctuary for free healing and supplies. Battles are turn based: scan, attack, guard, switch, use a potion, or bond with a weakened wild creature.</p><div class="evidence-note">This prototype includes one village, one route, three starters, Kai’s battle, Voltkit recruitment, and one complete investigation. Later chapter regions and evolutions belong to future stages.</div><div class="modal-actions"><button class="primary-button" data-action="close">Back to the adventure</button><button class="secondary-button" data-action="places">Places to visit</button></div>`);
   }
+  battleLogObserver?.disconnect();
+  battleLogObserver=null;
   $('modal-root').innerHTML=html;
   speech.sync(activeDialogue ? currentSegment(activeDialogue) : null);
   updateSpeechControls();
@@ -428,11 +438,28 @@ function renderModal({resetFocus=false} = {}) {
     const announcement=resolveSpeaker(segment.speaker,state.player.name).name+': '+segment.text;
     if ($('dialogue-announcer').textContent!==announcement) $('dialogue-announcer').textContent=announcement;
   } else {
-    focusable=root.querySelector('input, button:not(:disabled), [tabindex="0"]');
+    if (!resetFocus) focusable=logFocused?root.querySelector('.battle-log'):[...root.querySelectorAll('button:not(:disabled)')].find(button=>button.dataset.action===previousAction&&(!previousId||button.dataset.id===previousId)&&(!previousIndex||button.dataset.index===previousIndex));
+    focusable ||= root.querySelector('input, button:not(:disabled), [tabindex="0"]');
     $('dialogue-announcer').textContent='';
   }
   focusable?.focus({preventScroll:true});
-  const log=$('modal-root').querySelector('.battle-log'); if (log) log.scrollTop=log.scrollHeight;
+  const log=root.querySelector('.battle-log');
+  if (log) {
+    log.scrollTop=logPosition??log.scrollHeight;
+    let followLatest=logPosition===null;
+    let width=log.clientWidth, height=log.clientHeight;
+    log.addEventListener('scroll',()=>{
+      // A resize may move the scroll position before its observer runs.
+      if (width===log.clientWidth&&height===log.clientHeight) followLatest=log.scrollHeight-log.scrollTop-log.clientHeight<8;
+    },{passive:true});
+    if (typeof ResizeObserver!=='undefined') {
+      battleLogObserver=new ResizeObserver(()=>{
+        width=log.clientWidth; height=log.clientHeight;
+        if (followLatest) log.scrollTop=log.scrollHeight;
+      });
+      battleLogObserver.observe(log);
+    }
+  }
 }
 
 function questJournalModal() {
@@ -454,6 +481,60 @@ function investigationModal() {
   return modalShell('The Nocturnal Mystery',`C1-03 · ${complete?'INVESTIGATION COMPLETE':`${count} / 6 FIELD OBSERVATIONS`}`,`<p>The ranger claims nearly every forest Databeast is nocturnal. His original sample came only from the canopy at night. Test whether those records represent the entire forest.</p><div class="sampling-grid"><div class="sample-heading">HABITAT</div><div class="sample-heading">☀ DAYLIGHT</div><div class="sample-heading">☾ MOONLIGHT</div>${habitats().map(h=>`<div class="sample-title">${esc(h.title)}</div>${['day','night'].map(t=>`<div class="${hasObserved(h.id,t)?'recorded':''}">${hasObserved(h.id,t)?'✓ Recorded':state.flags.compass?'✥ Unobserved':'○ Not observed'}</div>`).join('')}`).join('')}</div><h3>What your sample shows</h3><div class="chart-legend"><span><i></i>Day sightings</span><span><i class="night"></i>Night sightings</span></div><div class="research-chart">${['day','night'].map(t=>`<div class="chart-row ${t}"><span>${t==='day'?'Daylight':'Moonlight'}</span><div class="bar"><i style="width:${totals[t]/max*100}%"></i></div><span>${totals[t]}</span></div>`).join('')}</div><div class="evidence-note">These are recorded sightings, not a census of unique creatures or an estimate of an individual creature’s probability of activity. Compare habitat and time coverage before drawing a conclusion.</div>${complete?'<p><strong>Conclusion:</strong> The initial sample was biased. Activity varies across habitats and times; the ranger’s records cannot justify a claim about the entire forest.</p><div class="modal-actions"><button class="primary-button" data-action="mastery">Optional mastery challenge</button><button class="secondary-button" data-action="dex">View learning entry</button></div>':`<h3>What can we conclude?</h3><div class="findings"><button class="finding-button" data-action="finding" data-answer="nocturnal" ${count<6?'disabled':''}>Nearly every forest Databeast must be nocturnal.</button><button class="finding-button" data-action="finding" data-answer="biased" ${count<6?'disabled':''}>The ranger’s sample leaves out habitats and times. We need broader evidence.</button><button class="finding-button" data-action="finding" data-answer="certain" ${count<6?'disabled':''}>Our new sample proves exactly how every creature will behave.</button></div>${count<6?'<p class="save-info">Visit all three habitats in both daylight and moonlight before submitting your finding.</p>':''}<div class="modal-actions"><button class="secondary-button" data-action="hint">${q.hints>=3?'Review guided explanation':'A nudge from Inferra'}</button><button class="secondary-button" data-action="close">Back to the field</button></div>`}`,{wide:true});
 }
 
+function battleParticipant(participant) {
+  if (!participant) return '';
+  if (!participant.speciesId) return `You · ${participant.name}`;
+  return `${participant.side==='enemy'?'Enemy':'Your'} ${participant.name}`;
+}
+
+function battleEventMarkup(entry) {
+  if (typeof entry==='string') return `<article class="battle-event" data-side="system" data-type="legacy"><div class="battle-event-heading"><span class="battle-event-side">Earlier event</span></div><p class="battle-event-effect">${esc(entry)}</p></article>`;
+  const side=entry.side;
+  const actor=battleParticipant(entry.actor), target=battleParticipant(entry.target);
+  const labels={player:'Your side',enemy:'Enemy',system:'Battle'};
+  let badge='', effect=entry.text;
+  if (entry.type==='damage') {
+    badge=`−${entry.amount} HP`;
+    effect=`${target} took ${entry.amount} damage.${entry.guarded?' Guard reduced the damage.':''}`;
+  } else if (entry.type==='heal') {
+    badge=`+${entry.amount} HP`;
+    effect=`${target} recovered ${entry.amount} HP.`;
+  } else if (typeof entry.focus==='number') {
+    badge=`+${entry.focus} Focus`;
+    effect=`${target} recovered ${entry.focus} Focus.${entry.guarded?' Guarding against the next attack.':''}`;
+  } else if (entry.type==='scan') {
+    badge='Free action';
+    effect=`${target} scanned. No turn consumed. Observations are recorded in the DataDex.`;
+  }
+  return `<article class="battle-event" data-side="${esc(side)}" data-type="${esc(entry.type)}">
+    <div class="battle-event-heading"><span class="battle-event-side">${labels[side]||'Battle'}</span><strong class="battle-event-action">${esc(entry.action)}</strong></div>
+    ${actor||target?`<div class="battle-event-route">${actor?`<span class="battle-event-actor">${esc(actor)}</span>`:''}${actor&&target?'<span class="battle-event-arrow" aria-hidden="true">→</span><span class="sr-only"> to </span>':''}${target?`<span class="battle-event-target">${esc(target)}</span>`:''}</div>`:''}
+    <p class="battle-event-effect">${badge?`<strong class="battle-event-value">${esc(badge)}</strong>`:''}<span>${esc(effect)}</span></p>
+  </article>`;
+}
+
+function battleTimeline(entries,complete=false) {
+  const groups=[];
+  // Keep engine order, including free actions and automatic replacements within a turn.
+  for (const entry of entries) {
+    const turn=typeof entry==='string'?0:entry.turn;
+    if (groups.at(-1)?.turn!==turn) groups.push({turn,entries:[]});
+    groups.at(-1).entries.push(entry);
+  }
+  return `<section class="battle-timeline" aria-labelledby="battle-log-title">
+    <div class="battle-timeline-heading"><h3 id="battle-log-title">${complete?'Battle recap':'Battle log'}</h3><span>In order · newest at the bottom</span></div>
+    <div class="battle-log" role="log" aria-label="Battle events, oldest first" aria-live="polite" aria-relevant="additions" tabindex="0">${groups.map(group=>`<div class="battle-turn" data-turn="${group.turn}"><h4>${group.turn?`Turn ${group.turn}`:'Battle so far'}</h4>${group.entries.map(battleEventMarkup).join('')}</div>`).join('')}</div>
+  </section>`;
+}
+
+function battleCombatant(member,side) {
+  const enemy=side==='enemy';
+  return `<section class="battle-combatant" data-side="${side}" aria-label="${enemy?'Enemy':'Your'} ${esc(creatureName(member.speciesId))}">
+    <div class="battle-stat"><p class="battle-side-label">${enemy?'Enemy':'Your Databeast'}</p><h3>${esc(creatureName(member.speciesId))}<small>Lv. ${member.level}</small></h3><div class="hp-bar"><i style="width:${Math.max(0,member.hp/member.maxHp*100)}%"></i></div><p><span>${member.hp} / ${member.maxHp} HP</span><span>Focus ${member.focus}</span></p></div>
+    <div class="battle-creature"><div class="ground"></div>${portrait(member.speciesId,enemy?150:180,enemy?'enemy':'player-art')}</div>
+  </section>`;
+}
+
 function battleModal() {
   const b=state.battle;
   if (!b) { modal='battle-result'; return modalShell('Encounter complete','FIELD JOURNAL','<p>The encounter has ended. Continue your adventure.</p><button class="primary-button" data-action="close">Continue</button>'); }
@@ -462,7 +543,14 @@ function battleModal() {
   const history=b.enemyHistory || [];
   const moveCounts={}; history.forEach(m=>{ const name=typeof m==='string'?m:m.moveName||m.name||m.moveId||'an action'; moveCounts[name]=(moveCounts[name]||0)+1; });
   const summary=Object.entries(moveCounts).map(([name,count])=>`${name}: ${count}/${history.length} observed turns`).join(' · ');
-  return modalShell(b.kind==='rival'?'Kai’s friendly challenge':'Wild Voltkit encounter',`TURN ${b.turn} · ${b.kind==='rival'?'LEARN TOGETHER':'A CHANCE TO BOND'}`,`<div class="battle-stage"><div class="ground"></div><div class="ground enemy"></div>${portrait(player.speciesId,180,'player-art')}${portrait(enemy.speciesId,150,'enemy')}<div class="battle-stat enemy"><h3>${esc(creatureName(enemy.speciesId))}<small>Lv. ${enemy.level}</small></h3><div class="hp-bar"><i style="width:${Math.max(0,enemy.hp/enemy.maxHp*100)}%"></i></div><p><span>HP</span><span>${enemy.hp} / ${enemy.maxHp}</span></p></div><div class="battle-stat"><h3>${esc(creatureName(player.speciesId))}<small>Lv. ${player.level}</small></h3><div class="hp-bar"><i style="width:${Math.max(0,player.hp/player.maxHp*100)}%"></i></div><p><span>${player.hp} / ${player.maxHp} HP</span><span>Focus ${player.focus}</span></p></div></div><div class="battle-body"><div><h3>What will ${esc(creatureName(player.speciesId))} do?</h3><div class="move-grid">${moves.map(m=>`<button class="move-button" data-action="battle-move" data-id="${esc(m.id)}" ${m.cost>player.focus?'disabled':''}>${esc(m.name)}<small>${esc(m.description || (m.power?'Power '+m.power:'Support'))}${m.cost?' · '+m.cost+' Focus':''}</small></button>`).join('')}<button class="move-button" data-action="guard">Guard<small>Reduce damage · recover Focus</small></button></div><div class="battle-tools"><button data-action="scan" ${b.scanned?'disabled':''}>${b.scanned?'✓ Scanned':'▧ Scan · free'}</button><button data-action="potion" ${state.inventory.potions<1?'disabled':''}>♧ Potion · ${state.inventory.potions}</button>${b.kind==='wild'?`<button class="bond" data-action="bond" ${state.inventory.bondCrystals<1?'disabled':''}>◇ Bond · ${state.inventory.bondCrystals}</button><button data-action="flee">Leave</button>`:''}</div>${state.party.length>1?`<div class="switch-list">${state.party.map((c,i)=>`<button data-action="switch" data-index="${i}" ${i===b.activeIndex||c.hp<=0?'disabled':''}>Switch to ${esc(creatureName(c.speciesId))} · ${c.hp} HP</button>`).join('')}</div>`:''}</div><div><h3>Encounter notes</h3><div class="battle-log" aria-live="polite">${(b.log||[]).slice(-8).map(line=>`<p>${esc(typeof line==='string'?line:line.text||JSON.stringify(line))}</p>`).join('')}</div><div class="battle-note">${b.scanned?`DataDex scan: ${summary?esc(summary)+'. ':''}Observed frequencies describe these turns. They do not guarantee the next move.`:'Your first scan is free. Observe behavior before choosing a strategy.'}${b.kind==='wild'?'<br>Bonding improves after a scan and at low HP. Avoid defeating it before using a crystal.':''}</div></div></div>`,{wide:true,battle:true});
+  return modalShell(b.kind==='rival'?'Kai’s friendly challenge':'Wild Voltkit encounter',`TURN ${b.turn} · ${b.kind==='rival'?'LEARN TOGETHER':'A CHANCE TO BOND'}`,`
+    <div class="battle-stage">${battleCombatant(player,'player')}${battleCombatant(enemy,'enemy')}</div>
+    ${battleTimeline(b.log||[])}
+    <div class="battle-body"><div><h3>What will ${esc(creatureName(player.speciesId))} do?</h3>
+      <div class="move-grid">${moves.map(m=>`<button class="move-button" data-action="battle-move" data-id="${esc(m.id)}" ${m.cost>player.focus?'disabled':''}>${esc(m.name)}<small>${esc(m.description || (m.power?'Power '+m.power:'Support'))}${m.cost?' · '+m.cost+' Focus':''}</small></button>`).join('')}<button class="move-button" data-action="guard">Guard<small>Reduce damage · recover Focus</small></button></div>
+      <div class="battle-tools"><button data-action="scan" ${b.scanned?'disabled':''}>${b.scanned?'✓ Scanned':'▧ Scan · free'}</button><button data-action="potion" ${state.inventory.potions<1?'disabled':''}>♧ Potion · ${state.inventory.potions}</button>${b.kind==='wild'?`<button class="bond" data-action="bond" ${state.inventory.bondCrystals<1?'disabled':''}>◇ Bond · ${state.inventory.bondCrystals}</button><button data-action="flee">Leave</button>`:''}</div>
+      ${state.party.length>1?`<div class="switch-list">${state.party.map((c,i)=>`<button data-action="switch" data-index="${i}" ${i===b.activeIndex||c.hp<=0?'disabled':''}>Switch to ${esc(creatureName(c.speciesId))} · ${c.hp} HP</button>`).join('')}</div>`:''}
+    </div><div><h3>Encounter notes</h3><div class="battle-note">${b.scanned?`DataDex scan: ${summary?esc(summary)+'. ':''}Observed frequencies describe these turns. They do not guarantee the next move.`:'Your first scan is free. Observe behavior before choosing a strategy.'}${b.kind==='wild'?'<br>Bonding improves after a scan and at low HP. Avoid defeating it before using a crystal.':''}</div></div></div>`,{wide:true,battle:true});
 }
 
 function dexModal() {

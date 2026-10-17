@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { SPEECH_PREFERENCE_KEY } from '../dist/speech.js';
+import { act, createGame, serializeGame, SPECIES } from '../dist/engine.js';
 
 const url = process.env.CHRONICLES_TEST_URL || 'http://127.0.0.1:4173';
 const artifactDir = resolve(import.meta.dirname, '../artifacts');
@@ -152,6 +153,218 @@ async function screenshot(name, mobile = false) {
   const picture = await cdp('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true, clip: { x: 0, y: 0, width: mobile ? 390 : 1440, height: Math.ceil(bounds.height), scale: 1 } });
   await writeFile(resolve(artifactDir, name), Buffer.from(picture.data, 'base64'));
   console.log(`Screenshot: artifacts/${name}`);
+}
+
+async function checkBattleLayout(mobile = false, viewportWidth = mobile ? 390 : 1440) {
+  await cdp('Emulation.setDeviceMetricsOverride', { width: viewportWidth, height: mobile ? 844 : 1050, deviceScaleFactor: 1, mobile });
+  await sleep(150);
+  const layout = await evaluate(`(() => {
+    const log = document.querySelector('.battle-log');
+    const timeline = document.querySelector('.battle-timeline');
+    const stage = document.querySelector('.battle-stage');
+    const controls = document.querySelector('.battle-body');
+    if (!log || !timeline || !stage || !controls) return null;
+    const rect = element => { const r = element.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, center: (r.left + r.right) / 2 }; };
+    const logBounds = rect(log);
+    const events = [...log.querySelectorAll('.battle-event')].map(element => ({
+      ...rect(element), side: element.dataset.side, type: element.dataset.type,
+      actor: element.querySelector('.battle-event-actor')?.textContent.trim(),
+      target: element.querySelector('.battle-event-target')?.textContent.trim(),
+      action: element.querySelector('.battle-event-action')?.textContent.trim(),
+      effect: element.querySelector('.battle-event-effect')?.textContent.trim(),
+      text: element.textContent.trim(), overflow: element.scrollWidth > element.clientWidth + 1,
+      escapedText: [...element.querySelectorAll('.battle-event-actor, .battle-event-target, .battle-event-action, .battle-event-effect')].some(text => {
+        const bounds = rect(text);
+        return bounds.left < logBounds.left - 1 || bounds.right > logBounds.right + 1;
+      }),
+    }));
+    const combatants = ['player', 'enemy'].map(side => {
+      const element = stage.querySelector('.battle-combatant[data-side="' + side + '"]');
+      const stat = element?.querySelector('.battle-stat');
+      const portrait = element?.querySelector('canvas');
+      return element && { ...rect(element), side, label: element.querySelector('.battle-side-label')?.textContent.trim(), stat: stat && rect(stat), portrait: portrait && rect(portrait) };
+    });
+    const turns = [...log.querySelectorAll('.battle-turn')].map(group => ({
+      turn: Number(group.dataset.turn), title: group.querySelector('h4')?.textContent.trim(),
+      sides: [...group.querySelectorAll('.battle-event:not([data-type="intro"]):not([data-type="legacy"])')].map(event => event.dataset.side),
+    }));
+    const portraits = [...stage.querySelectorAll('canvas')].map(rect);
+    document.querySelector('.battle-log').focus({ preventScroll: true });
+    return { stage: rect(stage), timeline: rect(timeline), controls: rect(controls), log: logBounds,
+      role: log.getAttribute('role'), tabindex: log.getAttribute('tabindex'), focused: document.activeElement === log,
+      atLatest: log.scrollHeight - log.scrollTop - log.clientHeight <= 2,
+      pageFits: document.documentElement.scrollWidth <= innerWidth, events, turns, combatants, portraits };
+  })()`);
+  const mode = `${mobile ? 'Mobile' : 'Desktop'} (${viewportWidth}px)`;
+  assert.ok(layout, `${mode} battle must have a stage, timeline and controls`);
+  assert.equal(layout.role, 'log', 'Encounter history must expose its log role');
+  assert.equal(layout.tabindex, '0', 'Encounter history must support keyboard scrolling');
+  assert.equal(layout.focused, true, 'Encounter history must accept keyboard focus');
+  assert.equal(layout.atLatest, true, `${mode} history following the newest event must stay at the bottom after reflow`);
+  assert.equal(layout.pageFits, true, `${mode} battle must fit horizontally`);
+  assert.ok(layout.timeline.top >= layout.stage.bottom - 1, `${mode} timeline must sit below the characters`);
+  assert.ok(layout.controls.top >= layout.timeline.bottom - 1, `${mode} controls must sit below the timeline`);
+  for (const portrait of layout.portraits) {
+    assert.ok(portrait.bottom <= layout.timeline.top + 1, `${mode} messages must not overlap a Databeast portrait`);
+  }
+  assert.ok(layout.combatants.every(combatant => combatant?.label), 'Both Databeast sides must have visible labels');
+  assert.ok(layout.combatants[0].center < layout.combatants[1].center, 'The player must stay on the left and enemy on the right');
+  const overlaps = (a, b) => Math.min(a.right, b.right) - Math.max(a.left, b.left) > 1 && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 1;
+  for (const combatant of layout.combatants) {
+    assert.ok(combatant.stat && combatant.portrait, 'Every battle side must show its Databeast portrait and stats');
+    assert.equal(overlaps(combatant.stat, combatant.portrait), false, `${mode} ${combatant.side} stats must not overlap its Databeast portrait`);
+  }
+  assert.equal(overlaps(layout.combatants[0].stat, layout.combatants[1].stat), false, `${mode} player and enemy stats must not overlap`);
+  for (const event of layout.events) {
+    assert.equal(event.overflow || event.escapedText, false, `${mode} message text must fit inside the history: ${event.text}`);
+    assert.ok(event.left >= layout.log.left - 1 && event.right <= layout.log.right + 1, `${mode} messages must fit the history width`);
+    if (event.side === 'player') assert.ok(event.center < layout.log.center - 4, `${mode} player events must align to the player's left side`);
+    else if (event.side === 'enemy') assert.ok(event.center > layout.log.center + 4, `${mode} enemy events must align to the enemy's right side`);
+    else assert.ok(Math.abs(event.center - layout.log.center) < 12, `${mode} neutral messages must remain centered`);
+    if (['damage', 'heal', 'status', 'switch', 'scan'].includes(event.type) && event.side !== 'system') {
+      assert.ok(event.actor && event.target && event.action && event.effect, `Battle actions must identify actor, target, action and outcome: ${event.text}`);
+    }
+  }
+  assert.ok(layout.turns.every(turn => Number.isInteger(turn.turn) && turn.title), 'History must label every turn group');
+  assert.deepEqual(layout.turns.map(turn => turn.turn), layout.turns.map(turn => turn.turn).sort((a, b) => a - b), 'Battle turns must appear in chronological order');
+  for (const turn of layout.turns) {
+    const playerIndex = turn.sides.indexOf('player');
+    const enemyIndex = turn.sides.indexOf('enemy');
+    if (playerIndex !== -1 && enemyIndex !== -1) assert.ok(playerIndex < enemyIndex, `Turn ${turn.turn} must show the player action before the enemy reply`);
+  }
+  return layout;
+}
+
+async function checkBattleRecap(outcome, terminalTurn) {
+  const recap = await evaluate(`(() => {
+    const timeline = document.querySelector('.battle-timeline');
+    const log = timeline?.querySelector('.battle-log');
+    if (!timeline || !log) return null;
+    return {
+      title: timeline.querySelector('h3')?.textContent.trim(), role: log.getAttribute('role'),
+      dialogueVisible: !!document.querySelector('.dialogue-box'),
+      events: [...log.querySelectorAll('.battle-event')].map(event => ({
+        type: event.dataset.type, side: event.dataset.side,
+        action: event.querySelector('.battle-event-action')?.textContent.trim(),
+        turn: Number(event.closest('.battle-turn')?.dataset.turn),
+      })),
+    };
+  })()`);
+  assert.ok(recap, 'The completed battle must show its recap immediately, before advancing result dialogue');
+  assert.equal(recap.dialogueVisible, true, 'The recap must accompany the result conversation');
+  assert.equal(recap.title, 'Battle recap', 'Completed encounter history must be labeled as a recap');
+  assert.equal(recap.role, 'log', 'Terminal battle history must retain the accessible log role');
+  assert.equal(recap.events.at(-1)?.turn, terminalTurn, 'The recap must preserve the completed final turn');
+  const terminal = recap.events.filter(event => event.turn === terminalTurn);
+  if (outcome === 'victory') {
+    const hitIndex = terminal.findLastIndex(event => event.type === 'damage');
+    assert.ok(hitIndex >= 0, 'Victory recap must preserve the decisive hit');
+    assert.equal(terminal[hitIndex].side, 'player');
+    assert.equal(terminal[hitIndex + 1]?.type, 'faint', 'The decisive hit must be followed by the enemy fainting');
+    assert.equal(terminal[hitIndex + 1]?.side, 'enemy');
+    assert.equal(terminal[hitIndex + 2]?.action, 'Victory', 'Enemy fainting must be followed by victory');
+    assert.ok(terminal.slice(hitIndex + 3).every(event => event.action === 'Level up'), 'Only earned level updates may follow victory');
+  } else if (outcome === 'bond') {
+    const accepted = terminal.findIndex(event => event.action === 'Bond accepted');
+    assert.ok(accepted >= 0, 'Bond recap must show the accepted crystal');
+    assert.equal(terminal[accepted].type, 'bond');
+    assert.equal(terminal[accepted].side, 'player');
+    assert.equal(terminal[accepted + 1]?.action, 'Bond complete', 'The accepted crystal must be followed by bond completion');
+  } else {
+    assert.equal(terminal.at(-1)?.action, 'Escaped', 'Leaving a wild battle must preserve the escape outcome');
+    assert.equal(terminal.at(-1)?.side, 'system');
+  }
+}
+
+async function checkBattleMessages() {
+  const original = await saved();
+  try {
+    // A legal imported party can share a species with Kai's partner. This
+    // deliberately catches attribution based on names rather than battle sides.
+    let fixture = act(createGame(), { type: 'CHOOSE_STARTER', speciesId: 'creature_statifox' }).state;
+    const speciesId = 'creature_algobear';
+    const maxHp = SPECIES[speciesId].baseHp + 5 * 3;
+    fixture.party.push({ uid: 'qa-algobear', speciesId, hp: 40, maxHp, focus: 4, level: 5, xp: 0 });
+    fixture.dex.species[speciesId].seen = true;
+    fixture.dex.species[speciesId].recruited = true;
+    fixture = act(fixture, { type: 'START_BATTLE', kind: 'rival' }).state;
+    await evaluate(`localStorage.setItem(${JSON.stringify(saveKey)}, ${JSON.stringify(serializeGame(fixture))})`);
+    await reloadGame();
+    await waitHeading('friendly challenge');
+    await action('switch', '[data-index="1"]');
+    const beforeScan = await saved();
+    await action('scan');
+    assert.equal((await saved()).battle.turn, beforeScan.battle.turn, 'A scan message must not advance the turn');
+    await action('battle-move', '[data-id="repair_rhythm"]');
+    await action('guard');
+    await action('potion');
+    await action('battle-move', '[data-id="focus_field"]');
+    await action('battle-move', '[data-id="observe_strike"]');
+    await action('switch', '[data-index="0"]');
+    await action('switch', '[data-index="1"]');
+    const encounter = await saved();
+    assert.equal(encounter.battle.activeIndex, 1, 'Same-species attribution fixture must keep the player Algobear active');
+    const desktop = await checkBattleLayout();
+    assert.ok(desktop.events.length > 8, 'History must retain more than the former eight-message limit');
+    assert.equal(desktop.events.length, encounter.battle.log.length, 'All retained battle events must be available for review');
+    const sharedSpeciesHit = desktop.events.find(event => event.side === 'enemy' && event.type === 'damage' && event.actor?.includes('Algobear') && event.target?.includes('Algobear'));
+    assert.ok(sharedSpeciesHit, 'Enemy and player Databeasts with the same species must still identify actor and target');
+    assert.notEqual(sharedSpeciesHit.actor, sharedSpeciesHit.target, 'Opposing Databeasts with the same name must have distinct side labels');
+    for (const type of ['damage', 'heal', 'status', 'scan', 'switch']) assert.ok(desktop.events.some(event => event.type === type), `History must display ${type} events`);
+    assert.ok(desktop.events.some(event => event.type === 'heal' && /Potion/i.test(event.action)), 'Potion healing must be labeled explicitly');
+    assert.ok(desktop.events.some(event => event.type === 'heal' && /Repair Rhythm/i.test(event.action)), 'Databeast healing must identify its move');
+    for (const event of desktop.events.filter(event => ['damage', 'heal'].includes(event.type))) assert.match(event.effect, /\d+.*HP|HP.*\d+/i, 'HP outcomes must include a readable amount and unit');
+    await screenshot('battle-desktop.png');
+    await checkBattleLayout(true);
+    await screenshot('battle-mobile.png', true);
+    await checkBattleLayout(true, 320);
+    const reviewPosition = await evaluate(`(() => {
+      const log = document.querySelector('.battle-log');
+      log.scrollTop = 0;
+      log.focus({ preventScroll: true });
+      return log.scrollTop;
+    })()`);
+    await sleep(100);
+    await action('guard');
+    const reviewed = await evaluate(`(() => {
+      const log = document.querySelector('.battle-log');
+      return { position: log.scrollTop, focused: document.activeElement === log, awayFromLatest: log.scrollHeight - log.scrollTop - log.clientHeight > 8 };
+    })()`);
+    assert.ok(Math.abs(reviewed.position - reviewPosition) <= 1 && reviewed.awayFromLatest, 'A new action must preserve the position of someone reviewing earlier battle events');
+    assert.equal(reviewed.focused, true, 'A new action must preserve keyboard focus while reviewing history');
+    const beforeReload = await saved();
+    await reloadGame();
+    await waitHeading('friendly challenge');
+    assert.deepEqual(await saved(), beforeReload, 'Structured battle history must survive a midbattle reload');
+
+    // Original version 1 saves contain plain strings and no reliable side or
+    // turn metadata. Preserve the text without inventing an actor or target.
+    const legacy = structuredClone(beforeReload);
+    legacy.battle.log = ['Statifox used Measured Strike for 8 damage.', `Earlier field note: ${'observed'.repeat(45)}`];
+    await evaluate(`localStorage.setItem(${JSON.stringify(saveKey)}, ${JSON.stringify(JSON.stringify(legacy))})`);
+    await reloadGame();
+    await waitHeading('friendly challenge');
+    const legacyLayout = await checkBattleLayout(true);
+    assert.equal(legacyLayout.events.length, legacy.battle.log.length, 'Original save messages must remain readable');
+    assert.ok(legacyLayout.events.every(event => event.side === 'system' && event.type === 'legacy'), 'Original message strings must be shown as neutral history');
+    assert.ok(legacyLayout.events.every((event, index) => event.text.includes(legacy.battle.log[index])), 'Original message text must survive loading');
+    assert.equal(legacyLayout.turns[0].turn, 0, 'Original messages without turn metadata need a separate history group');
+    fixture.battle = null;
+    fixture.flags.rivalDefeated = true;
+    fixture.quests.firstBond.status = 'complete';
+    fixture = act(fixture, { type: 'START_BATTLE', kind: 'wild' }).state;
+    await evaluate(`localStorage.setItem(${JSON.stringify(saveKey)}, ${JSON.stringify(serializeGame(fixture))})`);
+    await reloadGame();
+    await waitHeading('Wild Voltkit encounter');
+    await action('flee');
+    assert.equal((await saved()).battle, null, 'Leaving a wild encounter must end the battle');
+    await checkBattleRecap('escape', 1);
+    checks.push('Battle timeline: actor/target attribution with matching species, player/enemy alignment, chronological turns, full history, damage/healing/guard/potion/scan/switch outcomes, keyboard access, desktop/390px/320px fit, latest-event reflow and preserved history review, stats/portrait separation, reload, original save history and immediate escape recap');
+  } finally {
+    await evaluate(`localStorage.setItem(${JSON.stringify(saveKey)}, ${JSON.stringify(JSON.stringify(original))})`);
+    await cdp('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1050, deviceScaleFactor: 1, mobile: false });
+    await reloadGame();
+  }
 }
 
 async function checkSpokenDialogue() {
@@ -354,6 +567,7 @@ try {
   await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
   await eventually(() => evaluate(`!document.querySelector('#modal-root .modal')`), 'Escape must close DataDex');
   checks.push('Responsive layout, WASD D movement, DataDex X shortcut, modal keyboard focus and Escape');
+  await checkBattleMessages();
   console.log('Initial desktop and mobile screenshots ready. Starting full Stage 1 walkthrough.');
 
   await visit('lab', 'Listen to the world');
@@ -371,13 +585,16 @@ try {
   assert.equal(scanned.battle.turn, beforeScan.battle.turn);
   assert.equal(scanned.party[0].hp, beforeScan.party[0].hp);
   await action('potion');
+  let finalRivalTurn;
   for (let i = 0; i < 12 && (await saved()).battle; i++) {
+    finalRivalTurn = (await saved()).battle.turn;
     const choice = await evaluate(`document.querySelector('[data-action="battle-move"][data-id="pattern_pulse"]:not(:disabled)') ? 'pattern_pulse' : 'observe_strike'`);
     await action('battle-move', `[data-id="${choice}"]`);
   }
   assert.equal((await saved()).flags.rivalDefeated, true);
+  await checkBattleRecap('victory', finalRivalTurn);
   await close();
-  checks.push('Path walking, lab dialogue, locked gate, Kai victory, free scan, guard, potion');
+  checks.push('Path walking, lab dialogue, locked gate, Kai victory, decisive hit/faint/victory recap before result dialogue, free scan, guard, potion');
 
   await visit('tower', 'The rain');
   const towerConversation = await finishDialogue();
@@ -573,11 +790,16 @@ try {
   await action('save');
   await action('load');
   await waitHeading('Wild Voltkit encounter');
-  for (let i = 0; i < 5 && (await saved()).battle; i++) await action('bond');
+  let finalBondTurn;
+  for (let i = 0; i < 5 && (await saved()).battle; i++) {
+    finalBondTurn = (await saved()).battle.turn;
+    await action('bond');
+  }
   assert.equal((await saved()).flags.recruitedVoltkit, true);
   assert.equal((await saved()).party.length, 2);
+  await checkBattleRecap('bond', finalBondTurn);
   await close();
-  checks.push('Voltkit scan and weakening, midbattle reload and manual load, successful recruitment');
+  checks.push('Voltkit scan and weakening, midbattle reload and manual load, successful recruitment with immediate accepted-crystal/bond-complete recap');
 
   await visit('exit');
   await visit('sanctuary', 'catch your breath');
@@ -619,7 +841,7 @@ try {
   checks.push('Sanctuary healing/restocking, DataDex field notes, export/new journey/import, final reload');
   await screenshot('completed.png');
   assert.deepEqual(errors, [], 'Browser runtime must have no errors');
-  await writeFile(resolve(artifactDir, 'browser-smoke.json'), JSON.stringify({ status: 'passed', url, checks, errors, screenshots: ['dialogue.png', 'dialogue-mobile.png', 'inferra-dialogue.png', 'inferra-mobile.png', 'quest-journal.png', 'quest-journal-mobile.png', 'prototype.png', 'mobile.png', 'completed.png'] }, null, 2));
+  await writeFile(resolve(artifactDir, 'browser-smoke.json'), JSON.stringify({ status: 'passed', url, checks, errors, screenshots: ['dialogue.png', 'dialogue-mobile.png', 'battle-desktop.png', 'battle-mobile.png', 'inferra-dialogue.png', 'inferra-mobile.png', 'quest-journal.png', 'quest-journal-mobile.png', 'prototype.png', 'mobile.png', 'completed.png'] }, null, 2));
   console.log(JSON.stringify({ status: 'passed', checks, errors }, null, 2));
 } catch (error) {
   errors.push(error.stack || error.message);

@@ -106,10 +106,17 @@ function recordDexObservation(state, speciesId, observation) {
     if (entry.observations.length > 32) entry.observations.shift();
   }
 }
-function addLog(state, events, message) {
+function battler(member, side) {
+  return { name: SPECIES[member.speciesId].name, speciesId: member.speciesId, side };
+}
+function trainer(state) { return { name: state.player.name, side: 'player' }; }
+function battleName(participant) {
+  return `${participant.side === 'enemy' ? 'Enemy' : 'Your'} ${participant.name}`;
+}
+function addLog(state, events, message, details) {
   events.push(message);
   if (state.battle) {
-    state.battle.log.push(message);
+    state.battle.log.push({ text: message, turn: state.battle.turn, ...details });
     if (state.battle.log.length > 50) state.battle.log.shift();
   }
 }
@@ -117,13 +124,19 @@ function awardVictory(state, events, bonded = false) {
   const battle = state.battle;
   const firstRivalWin = battle.kind === 'rival' && !state.flags.rivalDefeated;
   const member = activeMember(state);
+  addLog(state, events, bonded ? 'Bond complete. Your team welcomes its new partner.' : 'Your team wins the battle!', {
+    side: 'system', type: 'status', actor: null, target: null, action: bonded ? 'Bond complete' : 'Victory',
+  });
   member.xp += battle.kind === 'rival' ? 30 : 18;
   while (member.level < 50 && member.xp >= member.level * 20) {
     member.xp -= member.level * 20;
     member.level += 1;
     member.maxHp += 3;
     member.hp = Math.min(member.maxHp, member.hp + 8);
-    events.push(`${SPECIES[member.speciesId].name} reached level ${member.level}!`);
+    const actor = battler(member, 'player');
+    addLog(state, events, `${battleName(actor)} reached level ${member.level}!`, {
+      side: 'player', type: 'status', actor, target: actor, action: 'Level up',
+    });
   }
   state.coins += battle.kind === 'rival' ? 30 : 12;
   if (battle.kind === 'rival') {
@@ -147,6 +160,7 @@ function enemyTurn(state, events) {
   if (!battle) return;
   const enemy = battle.enemy;
   let member = activeMember(state);
+  const actor = battler(enemy, 'enemy');
   // A visible repeating sequence supports observation without claiming fixed probabilities.
   const allMoves = SPECIES[enemy.speciesId].moves;
   const charging = battle.turn % 3 === 0;
@@ -155,24 +169,40 @@ function enemyTurn(state, events) {
   battle.enemyHistory.push({ turn: battle.turn, moveId: chosen.id, name: chosen.name });
   if (battle.enemyHistory.length > 30) battle.enemyHistory.shift();
   if (chosen.kind === 'support') {
+    const recovered = Math.min(4, 8 - enemy.focus);
     enemy.focus = Math.min(8, enemy.focus + 4);
     battle.enemyGuarded = true;
-    addLog(state, events, `${SPECIES[enemy.speciesId].name} used ${chosen.name} and gathered Focus.`);
+    addLog(state, events, `${battleName(actor)} used ${chosen.name}, recovered ${recovered} Focus, and guards against the next attack.`, {
+      side: 'enemy', type: 'status', actor, target: actor, action: chosen.name, focus: recovered, guarded: true,
+    });
   } else {
     enemy.focus = Math.max(0, enemy.focus - chosen.cost);
     const hit = Math.max(2, Math.floor(damage(enemy, member, chosen.power, battle.guarded) * (battle.kind === 'rival' ? 0.62 : 0.57)));
+    const lost = Math.min(member.hp, hit);
     member.hp = Math.max(0, member.hp - hit);
-    addLog(state, events, `${SPECIES[enemy.speciesId].name} used ${chosen.name}. ${SPECIES[member.speciesId].name} lost ${hit} HP.`);
+    const target = battler(member, 'player');
+    addLog(state, events, `${battleName(actor)} used ${chosen.name} on ${battleName(target)}. ${battleName(target)} lost ${lost} HP${battle.guarded ? ' (guarded)' : ''}.`, {
+      side: 'enemy', type: 'damage', actor, target, action: chosen.name, amount: lost, guarded: battle.guarded,
+    });
   }
   battle.guarded = false;
-  battle.turn += 1;
   if (member.hp === 0) {
+    const fainted = battler(member, 'player');
+    addLog(state, events, `${battleName(fainted)} has fainted.`, {
+      side: 'player', type: 'faint', actor: fainted, target: fainted, action: 'Fainted',
+    });
     const replacement = state.party.findIndex(candidate => candidate.hp > 0);
     if (replacement >= 0) {
       battle.activeIndex = replacement;
       member = activeMember(state);
-      addLog(state, events, `${SPECIES[member.speciesId].name} steps in to help.`);
+      const target = battler(member, 'player');
+      addLog(state, events, `${battleName(target)} replaces ${battleName(fainted)} and takes the field.`, {
+        side: 'player', type: 'switch', actor: fainted, target, action: 'Automatic switch',
+      });
     } else {
+      addLog(state, events, 'Your team has been defeated. Lyra brings everyone to the sanctuary to recover.', {
+        side: 'system', type: 'status', actor: null, target: null, action: 'Defeat',
+      });
       events.push('Your team needs rest. Lyra brings you to the sanctuary; everyone has been healed. You can try again.');
       restoreParty(state);
       state.map = 'village';
@@ -181,12 +211,15 @@ function enemyTurn(state, events) {
       state.battle = null;
     }
   }
+  battle.turn += 1;
 }
 
 export function act(currentState, action, rng = Math.random) {
   validateGame(currentState);
   ensure(action && typeof action === 'object' && typeof action.type === 'string', 'Choose a valid game action.');
   const state = clone(currentState);
+  // Keep the final timeline available after an outcome clears the active battle.
+  const previousBattle = state.battle;
   const events = [];
   switch (action.type) {
     case 'SET_NAME': {
@@ -244,7 +277,9 @@ export function act(currentState, action, rng = Math.random) {
       const speciesId = action.kind === 'wild' ? 'creature_voltkit' : STARTERS[(STARTERS.indexOf(state.starter) + 1) % STARTERS.length];
       state.battle = { kind: action.kind, enemy: creature(speciesId, action.kind === 'rival' ? 5 : 4, `enemy-${speciesId}`), activeIndex: index, turn: 1, scanned: false, log: [], enemyHistory: [], guarded: false, enemyGuarded: false, bondAttempts: 0 };
       trackSeen(state, speciesId);
-      addLog(state, events, action.kind === 'rival' ? `Kai challenges you with ${SPECIES[speciesId].name}!` : 'A curious wild Voltkit appears!');
+      addLog(state, events, action.kind === 'rival' ? `Kai challenges you with ${SPECIES[speciesId].name}!` : 'A curious wild Voltkit appears!', {
+        side: 'system', type: 'intro', actor: null, target: battler(state.battle.enemy, 'enemy'), action: 'Encounter',
+      });
       break;
     }
     case 'BATTLE_SCAN': {
@@ -258,7 +293,11 @@ export function act(currentState, action, rng = Math.random) {
       const names = battle.enemyHistory.map(row => row.name);
       const summary = names.length ? `Observed actions: ${names.join(', ')}. These observations describe this encounter; they do not establish the probability of the next move.` : 'No enemy actions observed yet. Watch its behavior; a small record cannot guarantee its next move.';
       recordDexObservation(state, battle.enemy.speciesId, summary);
-      addLog(state, events, `DataDex scan: ${summary} A weakened, scanned wild creature is easier to bond with. No turn consumed.`);
+      const actor = trainer(state);
+      const target = battler(battle.enemy, 'enemy');
+      addLog(state, events, `${actor.name} scanned ${battleName(target)} with the DataDex. ${summary} A weakened, scanned wild creature is easier to bond with. No turn consumed.`, {
+        side: 'player', type: 'scan', actor, target, action: 'DataDex scan',
+      });
       break;
     }
     case 'BATTLE_MOVE': {
@@ -268,29 +307,51 @@ export function act(currentState, action, rng = Math.random) {
       ensure(chosen, 'That Databeast does not know this move.');
       ensure(member.focus >= chosen.cost, 'Not enough Focus. Guard or use Focus Field to recover it.');
       member.focus -= chosen.cost;
+      const actor = battler(member, 'player');
       if (chosen.kind === 'attack') {
-        const hit = damage(member, state.battle.enemy, chosen.power, state.battle.enemyGuarded);
-        state.battle.enemy.hp = Math.max(0, state.battle.enemy.hp - hit);
-        state.battle.enemyGuarded = false;
-        addLog(state, events, `${SPECIES[member.speciesId].name} used ${chosen.name} for ${hit} damage.`);
-        if (state.battle.enemy.hp === 0) { awardVictory(state, events); break; }
+        const battle = state.battle;
+        const hit = damage(member, battle.enemy, chosen.power, battle.enemyGuarded);
+        const lost = Math.min(battle.enemy.hp, hit);
+        const target = battler(battle.enemy, 'enemy');
+        battle.enemy.hp = Math.max(0, battle.enemy.hp - hit);
+        addLog(state, events, `${battleName(actor)} used ${chosen.name} on ${battleName(target)}. ${battleName(target)} lost ${lost} HP${battle.enemyGuarded ? ' (guarded)' : ''}.`, {
+          side: 'player', type: 'damage', actor, target, action: chosen.name, amount: lost, guarded: battle.enemyGuarded,
+        });
+        battle.enemyGuarded = false;
+        if (battle.enemy.hp === 0) {
+          addLog(state, events, `${battleName(target)} has fainted.`, {
+            side: 'enemy', type: 'faint', actor: target, target, action: 'Fainted',
+          });
+          awardVictory(state, events);
+          break;
+        }
       } else if (chosen.kind === 'heal') {
         const restored = Math.min(chosen.power, member.maxHp - member.hp);
         member.hp += restored;
-        addLog(state, events, `${chosen.name} restored ${restored} HP.`);
+        addLog(state, events, `${battleName(actor)} used ${chosen.name} and restored ${restored} HP to ${battleName(actor)}.`, {
+          side: 'player', type: 'heal', actor, target: actor, action: chosen.name, amount: restored,
+        });
       } else {
+        const recovered = Math.min(chosen.power, 8 - member.focus);
         member.focus = Math.min(8, member.focus + chosen.power);
         state.battle.guarded = true;
-        addLog(state, events, `${SPECIES[member.speciesId].name} gathered Focus and braced for an attack.`);
+        addLog(state, events, `${battleName(actor)} used ${chosen.name}, recovered ${recovered} Focus, and guards against the next attack.`, {
+          side: 'player', type: 'status', actor, target: actor, action: chosen.name, focus: recovered, guarded: true,
+        });
       }
       enemyTurn(state, events);
       break;
     }
     case 'BATTLE_GUARD': {
       requireBattle(state);
-      activeMember(state).focus = Math.min(8, activeMember(state).focus + 3);
+      const member = activeMember(state);
+      const recovered = Math.min(3, 8 - member.focus);
+      const actor = battler(member, 'player');
+      member.focus = Math.min(8, member.focus + 3);
       state.battle.guarded = true;
-      addLog(state, events, 'Your partner guards and recovers 3 Focus.');
+      addLog(state, events, `${battleName(actor)} guards against the next attack and recovers ${recovered} Focus.`, {
+        side: 'player', type: 'status', actor, target: actor, action: 'Guard', focus: recovered, guarded: true,
+      });
       enemyTurn(state, events);
       break;
     }
@@ -298,8 +359,12 @@ export function act(currentState, action, rng = Math.random) {
       requireBattle(state);
       ensure(Number.isInteger(action.index) && state.party[action.index] && state.party[action.index].hp > 0, 'Choose a healthy party member.');
       ensure(action.index !== state.battle.activeIndex, 'That partner is already active.');
+      const actor = battler(activeMember(state), 'player');
       state.battle.activeIndex = action.index;
-      addLog(state, events, `${SPECIES[activeMember(state).speciesId].name} takes the field.`);
+      const target = battler(activeMember(state), 'player');
+      addLog(state, events, `${battleName(actor)} switches out for ${battleName(target)}. ${battleName(target)} takes the field.`, {
+        side: 'player', type: 'switch', actor, target, action: 'Switch',
+      });
       enemyTurn(state, events);
       break;
     }
@@ -311,7 +376,11 @@ export function act(currentState, action, rng = Math.random) {
       const restored = Math.min(30, member.maxHp - member.hp);
       state.inventory.potions -= 1;
       member.hp += restored;
-      addLog(state, events, `A potion restored ${restored} HP.`);
+      const actor = trainer(state);
+      const target = battler(member, 'player');
+      addLog(state, events, `${actor.name} used a Potion on ${battleName(target)}, restoring ${restored} HP.`, {
+        side: 'player', type: 'heal', actor, target, action: 'Potion', amount: restored,
+      });
       enemyTurn(state, events);
       break;
     }
@@ -326,6 +395,8 @@ export function act(currentState, action, rng = Math.random) {
       ensure(Number.isFinite(roll) && roll >= 0 && roll < 1, 'Random values must be between 0 and 1.');
       const weakened = 1 - battle.enemy.hp / battle.enemy.maxHp;
       const chance = Math.min(1, 0.15 + weakened * 0.60 + (battle.scanned ? 0.25 : 0) + battle.bondAttempts * 0.22);
+      const actor = trainer(state);
+      const target = battler(battle.enemy, 'enemy');
       state.inventory.bondCrystals -= 1;
       battle.bondAttempts += 1;
       if (roll < chance) {
@@ -334,10 +405,14 @@ export function act(currentState, action, rng = Math.random) {
         state.dex.species[recruit.speciesId].recruited = true;
         state.flags.recruitedVoltkit = true;
         state.researchPoints += 5;
-        events.push('Voltkit accepts your Bond Crystal and joins the team! Its health and Focus are restored.');
+        addLog(state, events, `${actor.name} offered a Bond Crystal to ${battleName(target)}. Voltkit accepts your Bond Crystal and joins the team! Its health and Focus are restored.`, {
+          side: 'player', type: 'bond', actor, target, action: 'Bond accepted',
+        });
         awardVictory(state, events, true);
       } else {
-        addLog(state, events, 'Voltkit hesitates. Weaken it and scan; each patient bonding attempt also improves trust.');
+        addLog(state, events, `${actor.name} offered a Bond Crystal to ${battleName(target)}. ${battleName(target)} hesitates. Weaken it and scan; each patient bonding attempt also improves trust.`, {
+          side: 'player', type: 'bond', actor, target, action: 'Bond attempt',
+        });
         enemyTurn(state, events);
       }
       break;
@@ -345,8 +420,10 @@ export function act(currentState, action, rng = Math.random) {
     case 'BATTLE_FLEE': {
       requireBattle(state);
       ensure(state.battle.kind === 'wild', 'Finish the friendly battle with Kai.');
+      addLog(state, events, 'You step away safely. The wild encounter can be tried again.', {
+        side: 'system', type: 'status', actor: null, target: null, action: 'Escaped',
+      });
       state.battle = null;
-      events.push('You step away safely. The wild encounter can be tried again.');
       break;
     }
     case 'HEAL_PARTY': {
@@ -450,7 +527,8 @@ export function act(currentState, action, rng = Math.random) {
     default: fail(`Unknown game action: ${action.type}.`);
   }
   validateGame(state);
-  return { state, events };
+  const battle = state.battle || previousBattle;
+  return battle ? { state, events, battleEvents: clone(battle.log) } : { state, events };
 }
 
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -462,6 +540,43 @@ function validateCreature(value) {
   ensure(textValue(value.uid, 80) && value.uid.length > 0 && Object.hasOwn(SPECIES, value.speciesId), 'Invalid creature identity.');
   ensure(integer(value.level, 1, 50) && value.maxHp === SPECIES[value.speciesId].baseHp + value.level * 3, 'Invalid creature level or maximum HP.');
   ensure(integer(value.hp, 0, value.maxHp) && integer(value.focus, 0, 8) && integer(value.xp, 0, 100000), 'Invalid creature health, Focus, or XP.');
+}
+function validateParticipant(value, state) {
+  ensure(isObject(value) && (keysExactly(value, ['name', 'side']) || keysExactly(value, ['name', 'speciesId', 'side'])), 'Invalid battle participant.');
+  ensure(['player', 'enemy'].includes(value.side) && textValue(value.name, 80) && value.name.trim().length > 0, 'Invalid battle participant.');
+  if (Object.hasOwn(value, 'speciesId')) {
+    ensure(Object.hasOwn(SPECIES, value.speciesId) && value.name === SPECIES[value.speciesId].name, 'Invalid battle participant species.');
+  } else {
+    ensure(value.side === 'player' && value.name === state.player.name, 'Invalid battle trainer.');
+  }
+}
+function validateBattleLogRow(row, state) {
+  // Original v1 saves stored plain strings. They remain readable beside new events.
+  if (typeof row === 'string') {
+    ensure(textValue(row, 2000), 'Invalid battle log.');
+    return;
+  }
+  const required = ['text', 'turn', 'side', 'type', 'actor', 'target', 'action'];
+  const optional = ['amount', 'focus', 'guarded'];
+  ensure(isObject(row) && required.every(key => Object.hasOwn(row, key)) && Object.keys(row).every(key => required.includes(key) || optional.includes(key)), 'Invalid battle log fields.');
+  ensure(textValue(row.text, 2000) && row.text.trim().length > 0 && textValue(row.action, 80) && row.action.trim().length > 0 && integer(row.turn, 1, state.battle.turn), 'Invalid battle log text or turn.');
+  ensure(['player', 'enemy', 'system'].includes(row.side) && ['damage', 'heal', 'status', 'scan', 'switch', 'bond', 'faint', 'intro'].includes(row.type), 'Invalid battle log category.');
+  if (row.actor !== null) validateParticipant(row.actor, state);
+  if (row.target !== null) validateParticipant(row.target, state);
+  ensure(row.side === 'system' ? row.actor === null : row.actor !== null && row.actor.side === row.side, 'Invalid battle log actor side.');
+  ensure(row.side !== 'system' || ['intro', 'status'].includes(row.type), 'Invalid system battle event.');
+  ensure(row.side === 'system' || row.target !== null, 'Battle action is missing its target.');
+  if (row.type === 'intro') ensure(row.side === 'system' && row.target?.side === 'enemy' && row.target.speciesId, 'Invalid battle introduction.');
+  if (['damage', 'heal'].includes(row.type)) {
+    ensure(row.actor && row.target?.speciesId && integer(row.amount, 0, SPECIES[row.target.speciesId].baseHp + 150), 'Invalid battle health change.');
+    if (row.type === 'damage') ensure(row.actor.speciesId && row.actor.side !== row.target.side, 'Invalid damage participants.');
+    if (row.type === 'heal') ensure(row.side === 'player' && row.target.side === 'player', 'Invalid healing participants.');
+  } else ensure(!Object.hasOwn(row, 'amount'), 'Unexpected battle health change.');
+  if (Object.hasOwn(row, 'focus')) ensure(row.type === 'status' && row.actor?.speciesId && integer(row.focus, 0, 8), 'Invalid battle Focus change.');
+  if (Object.hasOwn(row, 'guarded')) ensure(['damage', 'status'].includes(row.type) && typeof row.guarded === 'boolean', 'Invalid battle guard status.');
+  if (['scan', 'bond'].includes(row.type)) ensure(row.side === 'player' && row.target?.side === 'enemy' && row.target.speciesId, 'Invalid enemy interaction.');
+  if (row.type === 'switch') ensure(row.side === 'player' && row.actor?.speciesId && row.target?.side === 'player' && row.target.speciesId, 'Invalid battle switch.');
+  if (row.type === 'faint') ensure(row.actor?.speciesId && JSON.stringify(row.actor) === JSON.stringify(row.target), 'Invalid fainted participant.');
 }
 function validateGame(state) {
   ensure(keysExactly(state, ['schemaVersion', 'player', 'map', 'time', 'starter', 'party', 'inventory', 'dex', 'quests', 'battle', 'flags', 'coins', 'researchPoints']), 'Invalid save: game fields are missing or unexpected.');
@@ -519,7 +634,15 @@ function validateGame(state) {
     ensure(battle.kind !== 'wild' || battle.enemy.speciesId === 'creature_voltkit' && state.flags.rivalDefeated && !state.flags.recruitedVoltkit, 'Invalid wild encounter.');
     ensure(battle.kind !== 'rival' || battle.enemy.speciesId === STARTERS[(STARTERS.indexOf(state.starter) + 1) % STARTERS.length], 'Invalid rival partner.');
     ensure(integer(battle.turn, 1, 100000) && integer(battle.bondAttempts, 0, 100000) && ['scanned', 'guarded', 'enemyGuarded'].every(key => typeof battle[key] === 'boolean'), 'Invalid battle progress.');
-    ensure(Array.isArray(battle.log) && battle.log.length <= 50 && battle.log.every(row => textValue(row, 2000)), 'Invalid battle log.');
+    ensure(Array.isArray(battle.log) && battle.log.length <= 50, 'Invalid battle log.');
+    let previousLogTurn = 1;
+    battle.log.forEach(row => {
+      validateBattleLogRow(row, state);
+      if (typeof row !== 'string') {
+        ensure(row.turn >= previousLogTurn, 'Battle events are out of order.');
+        previousLogTurn = row.turn;
+      }
+    });
     ensure(Array.isArray(battle.enemyHistory) && battle.enemyHistory.length <= 30, 'Invalid enemy history.');
     battle.enemyHistory.forEach(row => ensure(keysExactly(row, ['turn', 'moveId', 'name']) && integer(row.turn, 1, battle.turn - 1) && SPECIES[battle.enemy.speciesId].moves.some(move => move.id === row.moveId && move.name === row.name), 'Invalid observed enemy action.'));
   }

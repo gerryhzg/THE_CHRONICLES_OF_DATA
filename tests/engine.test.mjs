@@ -255,3 +255,131 @@ test('unknown and unavailable actions have clear errors', () => {
   assert.throws(() => act(state, { type: 'MASTER_CONCEPT', answer: 'representative' }), /Finish/);
   assert.throws(() => act(state, { type: 'NOT_AN_ACTION' }), /Unknown game action/);
 });
+
+function messageBattle() {
+  return step(step(createGame(), { type: 'CHOOSE_STARTER', speciesId: starters[0] }), { type: 'START_BATTLE', kind: 'rival' });
+}
+
+test('battle messages identify both sides and preserve player action then enemy reply in one turn', () => {
+  const before = messageBattle();
+  const result = act(before, { type: 'BATTLE_MOVE', moveId: 'observe_strike' });
+  const [playerHit, enemyHit] = result.state.battle.log.slice(-2);
+  assert.equal(playerHit.side, 'player');
+  assert.equal(playerHit.actor.speciesId, starters[0]);
+  assert.equal(playerHit.target.speciesId, before.battle.enemy.speciesId);
+  assert.equal(playerHit.target.side, 'enemy');
+  assert.equal(playerHit.action, 'Measured Strike');
+  assert.equal(playerHit.amount, before.battle.enemy.hp - result.state.battle.enemy.hp);
+  assert.equal(enemyHit.side, 'enemy');
+  assert.equal(enemyHit.actor.speciesId, before.battle.enemy.speciesId);
+  assert.equal(enemyHit.target.side, 'player');
+  assert.equal(enemyHit.amount, before.party[0].hp - result.state.party[0].hp);
+  assert.equal(playerHit.turn, before.battle.turn);
+  assert.equal(enemyHit.turn, playerHit.turn);
+  assert.equal(result.state.battle.turn, playerHit.turn + 1);
+  assert.ok(result.events.every(event => typeof event === 'string'), 'Dialogue consumers still receive readable strings');
+  assert.equal(before.battle.log.length, 1, 'Logging must not mutate the original state');
+
+  const scanned = act(result.state, { type: 'BATTLE_SCAN' });
+  const scan = scanned.state.battle.log.at(-1);
+  assert.equal(scan.actor.name, before.player.name);
+  assert.equal(scan.target.side, 'enemy');
+  assert.equal(scan.type, 'scan');
+  assert.equal(scan.turn, result.state.battle.turn);
+  assert.equal(scanned.state.battle.turn, result.state.battle.turn, 'Free scan remains in the current turn');
+});
+
+test('healing and guard messages report their target and actual capped HP and Focus changes', () => {
+  const before = messageBattle();
+  before.party[0].hp -= 4;
+  const healed = act(before, { type: 'BATTLE_MOVE', moveId: 'quiet_recovery' });
+  const healing = healed.state.battle.log.find(event => event.type === 'heal');
+  assert.equal(healing.amount, 4);
+  assert.deepEqual(healing.actor, healing.target, 'Recovery clearly targets the acting partner');
+  assert.equal(healing.action, 'Quiet Recovery');
+  assert.match(healing.text, /Your Statifox/);
+
+  const potionState = messageBattle();
+  potionState.party[0].hp -= 2;
+  const potion = act(potionState, { type: 'BATTLE_POTION' }).state.battle.log.find(event => event.type === 'heal');
+  assert.equal(potion.amount, 2);
+  assert.equal(potion.actor.name, potionState.player.name);
+  assert.equal(potion.target.name, 'Statifox');
+
+  const guarded = act(messageBattle(), { type: 'BATTLE_GUARD' });
+  const [guard, reply] = guarded.state.battle.log.slice(-2);
+  assert.equal(guard.focus, 0, 'A partner already at full Focus gains zero Focus');
+  assert.equal(guard.guarded, true);
+  assert.deepEqual(guard.actor, guard.target);
+  assert.equal(reply.guarded, true, 'The reply explains that damage was guarded');
+  const supportState = messageBattle();
+  supportState.party[0].focus = 7;
+  const support = act(supportState, { type: 'BATTLE_MOVE', moveId: 'focus_field' }).state.battle.log.at(-2);
+  assert.equal(support.focus, 1);
+  assert.equal(support.action, 'Focus Field');
+});
+
+test('matching species retain their sides through a switch and a saved battle', () => {
+  let state = messageBattle();
+  const partner = { ...state.battle.enemy, uid: 'mirror-partner' };
+  state.party.push(partner);
+  Object.assign(state.dex.species[partner.speciesId], { seen: true, recruited: true });
+  state = step(state, { type: 'BATTLE_SWITCH', index: 1 });
+  const [switched, enemyHit] = state.battle.log.slice(-2);
+  assert.equal(switched.target.name, 'Algobear');
+  assert.equal(switched.target.side, 'player');
+  assert.equal(enemyHit.actor.name, enemyHit.target.name);
+  assert.equal(enemyHit.actor.side, 'enemy');
+  assert.equal(enemyHit.target.side, 'player');
+  assert.match(enemyHit.text, /Enemy Algobear.*Your Algobear/);
+  assert.deepEqual(parseGame(serializeGame(state)), state);
+});
+
+test('fainting, automatic replacement and final outcomes remain on the action turn', () => {
+  const replacementState = messageBattle();
+  const partner = { ...replacementState.battle.enemy, uid: 'replacement-partner' };
+  replacementState.party.push(partner);
+  Object.assign(replacementState.dex.species[partner.speciesId], { seen: true, recruited: true });
+  replacementState.party[0].hp = 1;
+  const replaced = act(replacementState, { type: 'BATTLE_GUARD' });
+  const replacementEvents = replaced.state.battle.log.slice(-4);
+  assert.deepEqual(replacementEvents.map(event => event.type), ['status', 'damage', 'faint', 'switch']);
+  assert.ok(replacementEvents.every(event => event.turn === 1));
+  assert.equal(replacementEvents[1].amount, 1, 'Damage reports HP actually lost');
+  assert.equal(replacementEvents[2].actor.name, 'Statifox');
+  assert.equal(replacementEvents[3].target.name, 'Algobear');
+  assert.equal(replaced.state.battle.activeIndex, 1);
+  assert.equal(replaced.state.battle.turn, 2);
+
+  const victoryState = messageBattle();
+  victoryState.battle.enemy.hp = 1;
+  const won = act(victoryState, { type: 'BATTLE_MOVE', moveId: 'observe_strike' });
+  assert.equal(won.state.battle, null);
+  const final = won.battleEvents.slice(1);
+  assert.deepEqual(final.slice(0, 3).map(event => event.type), ['damage', 'faint', 'status']);
+  assert.equal(final[0].amount, 1);
+  assert.equal(final[1].side, 'enemy');
+  assert.equal(final[2].action, 'Victory');
+  assert.ok(final.every(event => event.turn === 1));
+
+  const defeatState = messageBattle();
+  defeatState.party[0].hp = 1;
+  const lost = act(defeatState, { type: 'BATTLE_GUARD' });
+  assert.equal(lost.state.battle, null);
+  assert.deepEqual(lost.battleEvents.slice(-3).map(event => event.type), ['damage', 'faint', 'status']);
+  assert.equal(lost.battleEvents.at(-1).action, 'Defeat');
+});
+
+test('legacy log strings coexist with validated structured events without losing save compatibility', () => {
+  let state = messageBattle();
+  state.battle.log = ['Kai challenges you with Algobear!', 'An earlier battle note.'];
+  state = step(parseGame(serializeGame(state)), { type: 'BATTLE_GUARD' });
+  assert.equal(typeof state.battle.log[0], 'string');
+  assert.equal(state.battle.log.at(-1).type, 'damage');
+  assert.deepEqual(parseGame(serializeGame(state)), state);
+  const invalid = change => { const edited = structuredClone(state); change(edited.battle.log.at(-1)); return JSON.stringify(edited); };
+  assert.throws(() => parseGame(invalid(event => { event.actor.side = 'player'; })), /actor side|damage participants/);
+  assert.throws(() => parseGame(invalid(event => { event.amount = -1; })), /health change/);
+  assert.throws(() => parseGame(invalid(event => { event.turn = state.battle.turn + 1; })), /turn/);
+  assert.throws(() => parseGame(invalid(event => { event.target = null; })), /target/);
+});

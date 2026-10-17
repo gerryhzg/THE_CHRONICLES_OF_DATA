@@ -27,4 +27,73 @@
 @media(max-width:560px){.dialogue-box{grid-template-columns:78px minmax(0,1fr);gap:14px;padding:15px}.speaker-portrait{width:78px;height:78px}.dialogue-copy{min-height:98px;padding-top:0}.modal-content .speaker-heading h3{font-size:19px}.speaker-heading{gap:5px;margin-bottom:9px;padding-bottom:9px}.speaker-heading>span{font-size:7px;letter-spacing:.6px}.modal-content #dialogue-line{font-size:16px;line-height:1.6;min-height:78px}.dialogue-controls{gap:8px;padding-top:13px}.dialogue-buttons{gap:6px}.dialogue-buttons button{min-width:65px;padding:9px 10px;font-size:10px}.dialogue-position small{font-size:8px;max-width:128px;line-height:1.5}.dialogue-position>span{font-size:9px}.dialogue-followup{padding-top:19px}.dialogue-followup.completion h3{font-size:25px}}
 .battle-menu{display:flex;gap:12px;align-items:center}.battle-menu button{border:1px solid #5e724a;border-radius:4px;padding:8px 10px;white-space:nowrap;font-size:10px;color:#c9d5b7}
 @media(max-width:560px){.battle-menu{flex-direction:column;gap:5px}.battle-menu button{font-size:8px;padding:5px 7px}.modal-top:has(.battle-menu) h2{font-size:20px}}
+/* Keep each combatant's name, health and artwork on the same side. */
+.battle-stage{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:28px;height:auto;padding:16px 26px 0}
+.battle-combatant{min-width:0;display:flex;flex-direction:column;align-items:center;position:relative}
+.battle-combatant .battle-stat{position:static;min-width:0;width:100%;max-width:320px;padding:11px 15px;border-top:3px solid #537e61;z-index:1}
+.battle-combatant[data-side=enemy] .battle-stat{border-top-color:#9d5b4c}
+.battle-combatant .battle-side-label{font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#42604a;margin:0 0 7px;display:block}
+.battle-combatant[data-side=enemy] .battle-side-label{color:#854737}
+.battle-combatant .battle-stat h3{font-size:19px;gap:10px;flex-wrap:wrap;line-height:1.2}
+.battle-combatant .battle-stat p:not(.battle-side-label){font-size:11px;gap:8px;flex-wrap:wrap;color:#4b603c}
+.battle-creature{position:relative;display:flex;justify-content:center;align-items:end;width:100%;height:135px}
+.battle-stage .battle-creature canvas{position:relative;left:auto;right:auto;bottom:auto;width:135px;height:135px;max-width:100%;object-fit:contain}
+.battle-stage .battle-creature canvas.enemy{left:auto;right:auto;bottom:auto;width:120px;height:120px}
+.battle-stage .battle-creature .ground{left:50%;bottom:7px;transform:translateX(-50%);width:min(85%,200px);height:25px}
+/* Messages stay in document flow, between the creatures and action controls. */
+.battle-timeline{padding:16px 22px;background:#14251e;border-bottom:1px solid #3b4c35;min-width:0}
+.battle-timeline-heading{display:flex;align-items:baseline;justify-content:space-between;gap:8px 16px;flex-wrap:wrap;margin-bottom:12px}
+.battle-timeline-heading h3{font:600 13px Segoe UI,Arial,sans-serif;color:#e8e5d3;margin:0}
+.battle-timeline-heading>span{font-size:11px;line-height:1.5;color:#abbcab}
+.battle-log{display:block;height:auto;max-height:260px;min-height:80px;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable;padding:2px 8px 3px 0;color:#e2e9dc;line-height:1.5}
+.battle-log:focus-visible{outline:2px solid var(--gold);outline-offset:3px;border-radius:3px}
+.battle-turn{display:flex;flex-direction:column;gap:9px;min-width:0;margin-bottom:14px}
+.battle-turn:last-child{margin-bottom:0}
+.battle-turn h4{display:flex;align-items:center;gap:12px;margin:0 0 1px;color:#c0ccba;font-size:10px;line-height:1.5;font-weight:600;letter-spacing:1px;text-transform:uppercase}
+.battle-turn h4:after{content:'';height:1px;background:#3b5142;flex:1}
+.battle-event{--event-accent:#acd4bb;width:86%;align-self:flex-start;border:1px solid #48634f;border-left:3px solid var(--event-accent);background:#223c2e;border-radius:6px;padding:10px 13px;min-width:0;overflow-wrap:anywhere;text-align:left}
+.battle-event[data-side=enemy]{--event-accent:#f0b5a3;align-self:flex-end;background:#3b302b;border-color:#705247;border-left-width:1px;border-right:3px solid var(--event-accent)}
+.battle-event[data-side=system]{--event-accent:#d6c799;align-self:center;width:92%;background:#29342b;border:1px solid #52604a}
+.battle-event-heading{display:flex;align-items:baseline;gap:7px 12px;flex-wrap:wrap;line-height:1.4}
+.battle-event-side{font-size:10px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--event-accent)}
+.battle-event-action{font-size:13px;font-weight:600;color:#f0eadc}
+.battle-event-route{display:flex;align-items:baseline;gap:4px 7px;flex-wrap:wrap;margin-top:5px;font-size:12px;line-height:1.5;color:#e1e7d9}
+.battle-event-actor{font-weight:600;color:var(--event-accent)}
+.battle-event-arrow{color:#abb8a6}
+.battle-timeline .battle-event-effect{display:flex;align-items:baseline;gap:5px 10px;flex-wrap:wrap;font-size:12px;line-height:1.55;margin:6px 0 0;padding:0;border:0;color:#d0dac8}
+.battle-timeline .battle-event-value{flex:none;font-size:13px;font-weight:700;font-variant-numeric:tabular-nums;color:#f3c4b5}
+.battle-event[data-type=heal] .battle-event-value{color:#b3e4bc}
+.battle-event[data-type=status] .battle-event-value{color:#c6d7ff}
+.battle-event[data-type=scan] .battle-event-value{color:#e4d59d}
+.battle-body{grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:22px}
+.battle-body>div{min-width:0}
+.battle-body h3{font-size:11px;line-height:1.5;letter-spacing:1px}
+.battle-note{font-size:12px;color:#c8d2ba;margin-top:0}
+.battle-body .move-button{font-size:13px;line-height:1.4}
+.battle-body .move-button small{font-size:11px;line-height:1.5}
+.battle-body .battle-tools button,.battle-body .switch-list button{font-size:12px;line-height:1.5}
+.modal-content>.battle-timeline{margin-top:20px;border:1px solid #3b4c35;border-radius:6px;padding:15px}
+@media(max-width:560px){
+  .battle-stage{gap:12px;padding:12px 12px 0}
+  .battle-combatant .battle-stat{padding:9px;min-width:0}
+  .battle-combatant .battle-stat h3{font-size:16px;gap:4px 7px}
+  .battle-combatant .battle-stat h3 small{font-size:10px}
+  .battle-combatant .battle-side-label{font-size:9px;letter-spacing:.5px;margin-bottom:5px}
+  .battle-combatant .battle-stat p:not(.battle-side-label){font-size:10px;gap:4px}
+  .battle-creature{height:112px}
+  .battle-stage .battle-creature canvas{width:112px;height:112px}
+  .battle-stage .battle-creature canvas.enemy{width:100px;height:100px}
+  .battle-timeline{padding:14px 12px}
+  .battle-timeline-heading{gap:4px;margin-bottom:10px}
+  .battle-timeline-heading>span{font-size:10px}
+  .battle-log{max-height:245px;padding-right:5px}
+  .battle-event{width:92%;padding:10px}
+  .battle-event[data-side=system]{width:96%}
+  .battle-event-heading{gap:5px 8px}
+  .battle-event-route{gap:3px 5px}
+  .battle-body{grid-template-columns:minmax(0,1fr);gap:18px;padding:16px 12px}
+  .battle-body .move-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .battle-note{font-size:11px}
+  .modal-content>.battle-timeline{padding:12px}
+}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{transition:none!important;animation:none!important;scroll-behavior:auto!important}}

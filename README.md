@@ -108,6 +108,8 @@ Deploy the new commit, then open the production URL without a trailing comma: **
 
 Touch controls appear on small screens. Battles use buttons and pause movement. Dialog buttons support Tab and Enter; Escape returns from save or DataDex to an unfinished battle.
 
+In battle, your Databeast and its messages stay on the left; the enemy and its messages stay on the right. Each action names its actor and target, with explicit HP, healing, Focus, and guard outcomes. The battle log sits below the creatures, groups events by turn in action order, and scrolls from oldest to newest. Focus the log with Tab to review earlier events using the keyboard. The result screen keeps a recap of the finishing turn. Existing saves retain their original messages as earlier history.
+
 Story conversations show one dialogue segment at a time alongside the speaker's name, role, and portrait. Click **Next**, or press **Enter**, **Space**, or **E** to advance. **Back** revisits the previous segment; Tab and Enter also operate the Back button. Holding a key does not skip lines or automatically select a newly revealed choice. Expressions change with the conversation, and gameplay options appear on its final segment. Escape closes the conversation; reopening starts from its first segment. Character portraits include Lyra, Kai, Inferra, Rowan, the ranger, the player, and the DataDex.
 
 Every visit to Professor Inferra opens her portrait conversation, including return visits during fieldwork, evidence review, and after the investigation. Her dialogue reflects your observation count and discoveries. Hints, finding corrections, and mastery feedback use the same controls; a retry returns to the sampling choices after you finish her feedback.
@@ -172,6 +174,8 @@ node scripts/browser-smoke.mjs
 ```
 
 It writes screenshots and a verification report under `artifacts/`. Speech checks use a mock browser audio API to verify text synchronization, interruptions, controls, and unavailable-browser behavior; they do not verify audible output or voice quality. This README describes the checks available; consult their actual output for results.
+
+Battle checks cover matching species on opposing sides, actor and target labels, turn order, damage and healing outcomes, keyboard access, desktop and mobile layout, and old and new save histories. Battle screenshots are saved as `artifacts/battle-desktop.png` and `artifacts/battle-mobile.png`.
 
 The game is buildless HTML, CSS, and JavaScript. `dist/engine.js` contains serializable rules and save validation; `dist/quests.js` derives objectives, journey steps, and missing field categories from that state; `dist/world.js` contains maps and programmatically drawn pixel artwork; `dist/app.js` connects exploration, combat, investigation, and browser storage. `dist/dialogue.js` stores segmented conversations and navigation, while `dist/portraits.js` renders character portraits and expressions as accessible inline SVG. `dist/speech.js` manages optional spoken dialogue, character delivery, and the voice preference. `scripts/serve.mjs` serves the playable `dist/` folder. For dialogue contributions, see the [character voice guide](docs/character-voices.md).
 
