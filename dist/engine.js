@@ -1,4 +1,6 @@
 // Browser-native game rules. Every transition returns a fresh, serializable state.
+import { MAX_LEVEL, getAttackStrength, getExpRequired } from './progression.js';
+
 export const SAVE_KEY = 'chronicles-of-data:save:v1';
 const SAVE_LIMIT = 128 * 1024;
 const SCHEMA_VERSION = 1;
@@ -120,19 +122,33 @@ function addLog(state, events, message, details) {
     if (state.battle.log.length > 50) state.battle.log.shift();
   }
 }
+function progressionSnapshot(member) {
+  return { ...clone(member), attack: getAttackStrength(SPECIES[member.speciesId], member) };
+}
+function levelStats(member) {
+  return { level: member.level, hp: member.hp, maxHp: member.maxHp, attack: getAttackStrength(SPECIES[member.speciesId], member) };
+}
+function noBattleReward(outcome) {
+  return { outcome, xpGained: 0, recipient: null, before: null, after: null, levelUps: [], unlockedSkills: [] };
+}
 function awardVictory(state, events, bonded = false) {
   const battle = state.battle;
   const firstRivalWin = battle.kind === 'rival' && !state.flags.rivalDefeated;
   const member = activeMember(state);
+  const before = progressionSnapshot(member);
+  const levelUps = [];
+  const xpGained = battle.kind === 'rival' ? 30 : 18;
   addLog(state, events, bonded ? 'Bond complete. Your team welcomes its new partner.' : 'Your team wins the battle!', {
     side: 'system', type: 'status', actor: null, target: null, action: bonded ? 'Bond complete' : 'Victory',
   });
-  member.xp += battle.kind === 'rival' ? 30 : 18;
-  while (member.level < 50 && member.xp >= member.level * 20) {
-    member.xp -= member.level * 20;
+  member.xp += xpGained;
+  while (member.level < MAX_LEVEL && member.xp >= getExpRequired(member.level)) {
+    const statsBefore = levelStats(member);
+    member.xp -= getExpRequired(member.level);
     member.level += 1;
     member.maxHp += 3;
     member.hp = Math.min(member.maxHp, member.hp + 8);
+    levelUps.push({ level: member.level, before: statsBefore, after: levelStats(member), unlockedSkills: [] });
     const actor = battler(member, 'player');
     addLog(state, events, `${battleName(actor)} reached level ${member.level}!`, {
       side: 'player', type: 'status', actor, target: actor, action: 'Level up',
@@ -148,9 +164,14 @@ function awardVictory(state, events, bonded = false) {
     events.push('Voltkit slipped back into the grass. Another encounter is always available; try scanning and weakening it before bonding.');
   }
   state.battle = null;
+  return {
+    outcome: bonded ? 'bond' : 'victory', xpGained,
+    recipient: { uid: member.uid, speciesId: member.speciesId, name: SPECIES[member.speciesId].name },
+    before, after: progressionSnapshot(member), levelUps, unlockedSkills: [],
+  };
 }
 function damage(attacker, defender, power, guarded = false) {
-  const strength = SPECIES[attacker.speciesId].power + Math.floor(attacker.level / 3);
+  const strength = getAttackStrength(SPECIES[attacker.speciesId], attacker);
   const armor = Math.floor(SPECIES[defender.speciesId].guard / 2);
   const hit = Math.max(3, strength + power - armor);
   return guarded ? Math.max(1, Math.floor(hit / 2)) : hit;
@@ -158,6 +179,7 @@ function damage(attacker, defender, power, guarded = false) {
 function enemyTurn(state, events) {
   const battle = state.battle;
   if (!battle) return;
+  let progression = null;
   const enemy = battle.enemy;
   let member = activeMember(state);
   const actor = battler(enemy, 'enemy');
@@ -209,9 +231,11 @@ function enemyTurn(state, events) {
       state.player.x = 16;
       state.player.y = 13;
       state.battle = null;
+      progression = noBattleReward('defeat');
     }
   }
   battle.turn += 1;
+  return progression;
 }
 
 export function act(currentState, action, rng = Math.random) {
@@ -221,6 +245,7 @@ export function act(currentState, action, rng = Math.random) {
   // Keep the final timeline available after an outcome clears the active battle.
   const previousBattle = state.battle;
   const events = [];
+  let battleProgression = null;
   switch (action.type) {
     case 'SET_NAME': {
       requirePeace(state);
@@ -322,7 +347,7 @@ export function act(currentState, action, rng = Math.random) {
           addLog(state, events, `${battleName(target)} has fainted.`, {
             side: 'enemy', type: 'faint', actor: target, target, action: 'Fainted',
           });
-          awardVictory(state, events);
+          battleProgression = awardVictory(state, events);
           break;
         }
       } else if (chosen.kind === 'heal') {
@@ -339,7 +364,7 @@ export function act(currentState, action, rng = Math.random) {
           side: 'player', type: 'status', actor, target: actor, action: chosen.name, focus: recovered, guarded: true,
         });
       }
-      enemyTurn(state, events);
+      battleProgression = enemyTurn(state, events);
       break;
     }
     case 'BATTLE_GUARD': {
@@ -352,7 +377,7 @@ export function act(currentState, action, rng = Math.random) {
       addLog(state, events, `${battleName(actor)} guards against the next attack and recovers ${recovered} Focus.`, {
         side: 'player', type: 'status', actor, target: actor, action: 'Guard', focus: recovered, guarded: true,
       });
-      enemyTurn(state, events);
+      battleProgression = enemyTurn(state, events);
       break;
     }
     case 'BATTLE_SWITCH': {
@@ -365,7 +390,7 @@ export function act(currentState, action, rng = Math.random) {
       addLog(state, events, `${battleName(actor)} switches out for ${battleName(target)}. ${battleName(target)} takes the field.`, {
         side: 'player', type: 'switch', actor, target, action: 'Switch',
       });
-      enemyTurn(state, events);
+      battleProgression = enemyTurn(state, events);
       break;
     }
     case 'BATTLE_POTION': {
@@ -381,7 +406,7 @@ export function act(currentState, action, rng = Math.random) {
       addLog(state, events, `${actor.name} used a Potion on ${battleName(target)}, restoring ${restored} HP.`, {
         side: 'player', type: 'heal', actor, target, action: 'Potion', amount: restored,
       });
-      enemyTurn(state, events);
+      battleProgression = enemyTurn(state, events);
       break;
     }
     case 'BATTLE_BOND': {
@@ -408,12 +433,12 @@ export function act(currentState, action, rng = Math.random) {
         addLog(state, events, `${actor.name} offered a Bond Crystal to ${battleName(target)}. Voltkit accepts your Bond Crystal and joins the team! Its health and Focus are restored.`, {
           side: 'player', type: 'bond', actor, target, action: 'Bond accepted',
         });
-        awardVictory(state, events, true);
+        battleProgression = awardVictory(state, events, true);
       } else {
         addLog(state, events, `${actor.name} offered a Bond Crystal to ${battleName(target)}. ${battleName(target)} hesitates. Weaken it and scan; each patient bonding attempt also improves trust.`, {
           side: 'player', type: 'bond', actor, target, action: 'Bond attempt',
         });
-        enemyTurn(state, events);
+        battleProgression = enemyTurn(state, events);
       }
       break;
     }
@@ -424,6 +449,7 @@ export function act(currentState, action, rng = Math.random) {
         side: 'system', type: 'status', actor: null, target: null, action: 'Escaped',
       });
       state.battle = null;
+      battleProgression = noBattleReward('escape');
       break;
     }
     case 'HEAL_PARTY': {
@@ -528,7 +554,9 @@ export function act(currentState, action, rng = Math.random) {
   }
   validateGame(state);
   const battle = state.battle || previousBattle;
-  return battle ? { state, events, battleEvents: clone(battle.log) } : { state, events };
+  const result = battle ? { state, events, battleEvents: clone(battle.log) } : { state, events };
+  if (battleProgression) result.battleProgression = battleProgression;
+  return result;
 }
 
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -538,7 +566,7 @@ function keysExactly(value, keys) { return isObject(value) && Object.keys(value)
 function validateCreature(value) {
   ensure(keysExactly(value, ['uid', 'speciesId', 'hp', 'maxHp', 'focus', 'level', 'xp']), 'Invalid creature record.');
   ensure(textValue(value.uid, 80) && value.uid.length > 0 && Object.hasOwn(SPECIES, value.speciesId), 'Invalid creature identity.');
-  ensure(integer(value.level, 1, 50) && value.maxHp === SPECIES[value.speciesId].baseHp + value.level * 3, 'Invalid creature level or maximum HP.');
+  ensure(integer(value.level, 1, MAX_LEVEL) && value.maxHp === SPECIES[value.speciesId].baseHp + value.level * 3, 'Invalid creature level or maximum HP.');
   ensure(integer(value.hp, 0, value.maxHp) && integer(value.focus, 0, 8) && integer(value.xp, 0, 100000), 'Invalid creature health, Focus, or XP.');
 }
 function validateParticipant(value, state) {
@@ -568,7 +596,7 @@ function validateBattleLogRow(row, state) {
   ensure(row.side === 'system' || row.target !== null, 'Battle action is missing its target.');
   if (row.type === 'intro') ensure(row.side === 'system' && row.target?.side === 'enemy' && row.target.speciesId, 'Invalid battle introduction.');
   if (['damage', 'heal'].includes(row.type)) {
-    ensure(row.actor && row.target?.speciesId && integer(row.amount, 0, SPECIES[row.target.speciesId].baseHp + 150), 'Invalid battle health change.');
+    ensure(row.actor && row.target?.speciesId && integer(row.amount, 0, SPECIES[row.target.speciesId].baseHp + MAX_LEVEL * 3), 'Invalid battle health change.');
     if (row.type === 'damage') ensure(row.actor.speciesId && row.actor.side !== row.target.side, 'Invalid damage participants.');
     if (row.type === 'heal') ensure(row.side === 'player' && row.target.side === 'player', 'Invalid healing participants.');
   } else ensure(!Object.hasOwn(row, 'amount'), 'Unexpected battle health change.');

@@ -2,7 +2,7 @@
 // Uses Node's native WebSocket and a fresh profile; no browser packages are needed.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { SPEECH_PREFERENCE_KEY } from '../dist/speech.js';
 import { act, createGame, serializeGame, SPECIES } from '../dist/engine.js';
@@ -12,6 +12,8 @@ const artifactDir = resolve(import.meta.dirname, '../artifacts');
 const runId = Date.now();
 const downloadDir = resolve(artifactDir, `browser-downloads-${runId}`);
 const profile = resolve(artifactDir, `browser-profile-${runId}`);
+const musicTrackIds = ['village', 'forest', 'night', 'battle', 'mystery', 'celebration', 'rest'];
+const musicTrackSizes = Object.fromEntries(await Promise.all(musicTrackIds.map(async id => [id, (await stat(resolve(import.meta.dirname, `../dist/music/${id}.mp3`))).size])));
 const port = Number(process.env.CHRONICLES_DEBUG_PORT || 9222);
 const saveKey = 'chronicles-of-data:save:v1';
 const candidates = [process.env.CHRONICLES_BROWSER, 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', 'C:/Program Files/Microsoft/Edge/Application/msedge.exe'].filter(Boolean);
@@ -23,6 +25,87 @@ await mkdir(profile, { recursive: true });
 const sleep = ms => new Promise(resolveWait => setTimeout(resolveWait, ms));
 const errors = [];
 const checks = [];
+const musicPreferenceKey = 'chronicles-of-data.music.v1';
+const audioMockSource = `(() => {
+  // No hardware AudioContext is opened by browser QA. Native OfflineAudioContext
+  // remains available for a separate, non-audible waveform render.
+  const test = window.__audioTest = { contexts: [], events: [], decodes: [], fetches: [], encodedFiles: new WeakMap(), hidden: false };
+  const originalFetch = window.fetch.bind(window);
+  window.fetch = async (...args) => {
+    const request = String(args[0]?.url || args[0]);
+    const path = new URL(request, window.location?.href || 'http://127.0.0.1/').pathname;
+    const file = path.split('/').at(-1);
+    const track = path.includes('/music/') && file.endsWith('.mp3') ? file.slice(0, -4) : null;
+    if (track) test.fetches.push({ url: request, track, file });
+    const response = await originalFetch(...args);
+    if (track) {
+      const read = response.arrayBuffer.bind(response);
+      response.arrayBuffer = async (...readArgs) => { const bytes = await read(...readArgs); test.encodedFiles.set(bytes, track); return bytes; };
+    }
+    return response;
+  };
+  let nextNode = 1;
+  class Param {
+    constructor(node, name, value = 1) { this.node = node; this.name = name; this.value = value; }
+    record(method, value, time) { test.events.push({ context: this.node.context.id, node: this.node.id, name: this.name, method, value, time }); if (value !== undefined) this.value = value; return this; }
+    cancelScheduledValues(time) { return this.record('cancel', undefined, time); }
+    cancelAndHoldAtTime(time) { return this.record('hold', undefined, time); }
+    setValueAtTime(value, time) { return this.record('set', value, time); }
+    linearRampToValueAtTime(value, time) { return this.record('linear', value, time); }
+    exponentialRampToValueAtTime(value, time) { return this.record('exponential', value, time); }
+    setTargetAtTime(value, time) { return this.record('target', value, time); }
+  }
+  class AudioNode extends EventTarget {
+    constructor(context, kind) { super(); this.context = context; this.kind = kind; this.id = nextNode++; this.connections = []; context.nodes.push(this); }
+    connect(node) { this.connections.push(node.id); return node; }
+    disconnect() { this.disconnected = true; this.connections = []; }
+  }
+  class Source extends AudioNode {
+    constructor(context, kind = 'source') { super(context, kind); this.loop = false; this.playbackRate = new Param(this, 'playbackRate'); this.frequency = new Param(this, 'frequency', 440); }
+    start(time = this.context.currentTime) { this.startAt = time; test.events.push({ context: this.context.id, node: this.id, method: 'start', time, loop: this.loop }); }
+    finish() { if (this.ended) return; this.ended = true; clearTimeout(this.endTimer); this.onended?.(); this.dispatchEvent(new Event('ended')); }
+    stop(time = this.context.currentTime) { this.stopAt = time; test.events.push({ context: this.context.id, node: this.id, method: 'stop', time }); clearTimeout(this.endTimer); this.endTimer = setTimeout(() => this.finish(), Math.max(0, (time - this.context.currentTime) * 1000)); }
+  }
+  class MockAudioContext extends EventTarget {
+    constructor() { super(); this.id = test.contexts.length; this.nodes = []; this.state = 'suspended'; this.sampleRate = 22050; this.started = performance.now(); this.offset = 0; this.destination = new AudioNode(this, 'destination'); test.contexts.push(this); }
+    get currentTime() { return (performance.now() - this.started) / 1000 + this.offset; }
+    createGain() { const node = new AudioNode(this, 'gain'); node.gain = new Param(node, 'gain'); return node; }
+    createBufferSource() { return new Source(this); }
+    createOscillator() { return new Source(this, 'oscillator'); }
+    createBuffer(channels, length, sampleRate) {
+      const data = Array.from({ length: channels }, () => new Float32Array(length));
+      return { numberOfChannels: channels, length, sampleRate, duration: length / sampleRate, getChannelData: index => data[index], copyToChannel: (source, channel, offset = 0) => data[channel].set(source, offset) };
+    }
+    async decodeAudioData(encoded) {
+      const bytes = new Uint8Array(encoded);
+      const isMp3 = bytes.length > 4 && ((bytes[0] === 73 && bytes[1] === 68 && bytes[2] === 51) || (bytes[0] === 255 && (bytes[1] & 224) === 224));
+      if (!isMp3) throw new DOMException('Expected MP3 bytes in the output-context mock.', 'EncodingError');
+      const buffer = this.createBuffer(2, this.sampleRate * 4, this.sampleRate);
+      buffer.decodedFromFile = true;
+      buffer.decodedTrack = test.encodedFiles.get(encoded) || null;
+      buffer.encodedByteLength = bytes.length;
+      for (let channel = 0; channel < 2; channel++) {
+        const samples = buffer.getChannelData(channel);
+        for (let i = 0; i < samples.length; i++) samples[i] = Math.sin(i / 25) * .01;
+      }
+      test.decodes.push({ context: this.id, track: buffer.decodedTrack, byteLength: bytes.length, mp3: true });
+      return buffer;
+    }
+    async resume() { this.state = 'running'; test.events.push({ context: this.id, method: 'resume' }); this.dispatchEvent(new Event('statechange')); }
+    async suspend() { this.state = 'suspended'; test.events.push({ context: this.id, method: 'suspend' }); this.dispatchEvent(new Event('statechange')); }
+    async close() { this.state = 'closed'; this.nodes.filter(node => node.kind === 'source' || node.kind === 'oscillator').forEach(node => node.finish()); this.dispatchEvent(new Event('statechange')); }
+  }
+  test.advance = seconds => { for (const context of test.contexts) { context.offset += seconds; context.nodes.filter(node => node.stopAt !== undefined && node.stopAt <= context.currentTime).forEach(node => node.finish()); } };
+  test.setHidden = value => { test.hidden = value; document.dispatchEvent(new Event('visibilitychange')); };
+  test.snapshot = () => ({ contexts: test.contexts.map(context => ({ id: context.id, state: context.state, currentTime: context.currentTime,
+    sources: context.nodes.filter(node => node.kind === 'source').map(node => ({ id: node.id, loop: node.loop, startAt: node.startAt, stopAt: node.stopAt, ended: !!node.ended, decodedFromFile: !!node.buffer?.decodedFromFile, decodedTrack: node.buffer?.decodedTrack, encodedByteLength: node.buffer?.encodedByteLength, live: node.startAt !== undefined && !node.ended && (node.stopAt === undefined || node.stopAt > context.currentTime) })),
+    master: context.nodes.filter(node => node.kind === 'gain' && node.connections.includes(context.destination.id)).map(node => ({ id: node.id, value: node.gain.value })),
+  })), events: test.events, decodes: test.decodes, fetches: test.fetches });
+  Object.defineProperty(document, 'hidden', { configurable: true, get: () => test.hidden });
+  Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => test.hidden ? 'hidden' : 'visible' });
+  Object.defineProperty(window, 'AudioContext', { configurable: true, value: MockAudioContext });
+  Object.defineProperty(window, 'webkitAudioContext', { configurable: true, value: MockAudioContext });
+})()`;
 let browser, ws, sessionId;
 const pending = new Map();
 let nextId = 1;
@@ -247,6 +330,7 @@ async function checkBattleLayout(mobile = false, viewportWidth = mobile ? 390 : 
 }
 
 async function checkBattleRecap(outcome, terminalTurn) {
+  await checkInitialRewardFocus();
   const recap = await evaluate(`(() => {
     const timeline = document.querySelector('.battle-timeline');
     const log = timeline?.querySelector('.battle-log');
@@ -284,6 +368,198 @@ async function checkBattleRecap(outcome, terminalTurn) {
   } else {
     assert.equal(terminal.at(-1)?.action, 'Escaped', 'Leaving a wild battle must preserve the escape outcome');
     assert.equal(terminal.at(-1)?.side, 'system');
+  }
+}
+
+async function checkInitialRewardFocus() {
+  const opening = await evaluate(`(() => {
+    const rewards = document.querySelector('.battle-progression');
+    const heading = rewards?.querySelector('#battle-progression-title');
+    const modal = rewards?.closest('.modal');
+    if (!rewards || !heading || !modal) return null;
+    const title = heading.getBoundingClientRect(), container = modal.getBoundingClientRect();
+    const save = JSON.parse(localStorage.getItem(${JSON.stringify(saveKey)}));
+    const base = save?.time === 'night' ? 'night' : save?.map === 'forest' ? 'forest' : 'village';
+    const outcome = rewards.dataset.outcome;
+    return { focused: document.activeElement === rewards, tabindex: rewards.getAttribute('tabindex'), scrollTop: modal.scrollTop,
+      musicScene: document.querySelector('#music-status')?.dataset.scene, expectedMusic: ['victory', 'bond'].includes(outcome) ? 'celebration' : outcome === 'defeat' ? 'rest' : base,
+      headingVisible: title.top >= Math.max(0, container.top) - 1 && title.bottom <= Math.min(innerHeight, container.bottom) + 1 && title.left >= 0 && title.right <= innerWidth };
+  })()`);
+  assert.ok(opening, 'A new battle result must immediately show its rewards');
+  assert.equal(opening.focused, true, 'A new battle result must focus rewards before the result conversation');
+  assert.equal(opening.tabindex, '-1', 'Rewards must allow initial programmatic focus without adding an extra tab stop');
+  assert.ok(opening.scrollTop <= 2 && opening.headingVisible, 'A new result must open at the top with its rewards heading visible');
+  assert.equal(opening.musicScene, opening.expectedMusic, 'The result soundtrack must match victory, bonding, defeat or a return to the map');
+}
+
+const expView = selector => evaluate(`(() => {
+  const root = document.querySelector(${JSON.stringify(selector)});
+  if (!root) return null;
+  const bar = root.querySelector('[role="progressbar"]');
+  const dialogue = document.querySelector('.dialogue-box');
+  const bounds = root.getBoundingClientRect();
+  return {
+    text: root.textContent.trim(), progress: [...root.querySelectorAll('.exp-progress-text')].map(element => element.textContent.trim()).join(' '),
+    bar: bar && { now: Number(bar.getAttribute('aria-valuenow')), max: Number(bar.getAttribute('aria-valuemax')), min: Number(bar.getAttribute('aria-valuemin')) },
+    earned: root.querySelector('.battle-exp-earned')?.getAttribute('data-exp'),
+    name: root.querySelector('.battle-progression-name')?.textContent.trim(),
+    notices: [...root.querySelectorAll('.level-up-notice')].map(notice => ({ level: Number(notice.dataset.level), text: notice.textContent.trim(), stats: [...notice.querySelectorAll('.level-up-stat')].map(stat => { const visible = stat.cloneNode(true); visible.querySelectorAll('.sr-only').forEach(element => element.remove()); return visible.textContent.trim(); }) })),
+    skillNotices: root.querySelectorAll('.level-up-skills').length,
+    immediate: !!dialogue && !!(root.compareDocumentPosition(dialogue) & Node.DOCUMENT_POSITION_FOLLOWING),
+    pageFits: document.documentElement.scrollWidth <= innerWidth,
+    overflow: root.scrollWidth > root.clientWidth + 1,
+    textEscapes: [...root.querySelectorAll('.battle-progression-name, .battle-exp-earned, .exp-progress-text, .level-up-notice, .level-up-stat')].some(element => {
+      const text = element.getBoundingClientRect();
+      return text.left < bounds.left - 1 || text.right > bounds.right + 1;
+    }),
+  };
+})()`);
+
+function assertExpProgress(view, { xp, required, remaining, nextLevel, cap = false }) {
+  assert.ok(view, 'Databeast progression must be visible');
+  if (cap) {
+    assert.match(view.progress, /Maximum level.*Lv\. 50/i, 'A level 50 Databeast must show the level cap');
+    assert.equal(view.bar, null, 'A capped Databeast must not show a bar toward an unavailable level');
+    return;
+  }
+  assert.ok(view.progress.includes(`${xp} / ${required} EXP`), 'Progress must show the exact saved EXP and next-level requirement');
+  assert.ok(view.progress.includes(`${remaining} EXP to Lv. ${nextLevel}`), 'Progress must show the exact EXP remaining to the next level');
+  assert.deepEqual(view.bar, { now: xp, max: required, min: 0 }, 'Accessible progress values must agree with the visible EXP');
+}
+
+async function checkProgressionResult(expected, mobile = false, viewportWidth = mobile ? 390 : 1440) {
+  await cdp('Emulation.setDeviceMetricsOverride', { width: viewportWidth, height: mobile ? 844 : 1050, deviceScaleFactor: 1, mobile });
+  await sleep(150);
+  const view = await expView('.battle-progression');
+  assert.ok(view?.immediate, 'Battle rewards must be visible before advancing the result conversation');
+  assert.ok(typeof view.earned === 'string' && view.earned !== '', 'Battle results must include an explicit EXP amount');
+  assert.equal(Number(view.earned), expected.earned, 'Battle results must show the actual EXP awarded');
+  if (expected.name) assert.ok(view.name?.includes(expected.name), 'Battle results must name the Databeast receiving EXP');
+  if (expected.required || expected.cap) assertExpProgress(view, expected);
+  assert.deepEqual(view.notices.map(notice => notice.level), expected.levels || [], 'Every earned level must have one notification in order');
+  if (expected.reason) assert.match(view.text, expected.reason, 'A zero-EXP result must explain why no reward was earned');
+  assert.equal(view.pageFits && !view.overflow && !view.textEscapes, true, `${viewportWidth}px EXP results and stat changes must fit without overflow`);
+  assert.equal(view.skillNotices, 0, 'The current roster must not display an unearned skill unlock');
+  assert.doesNotMatch(view.text, /(?:Unlocked|New|Learned)\s+(?:skill|move)\s*:/i, 'The current roster must not invent a skill unlock');
+  return view;
+}
+
+async function checkBattleProgression() {
+  const original = await saved();
+  const fixture = ({ kind = 'rival', xp = 0, level = 5, bench = false, activeIndex = 0, enemyHp = 1 } = {}) => {
+    let state = act(createGame(), { type: 'CHOOSE_STARTER', speciesId: 'creature_statifox' }).state;
+    Object.assign(state.party[0], { xp, level, maxHp: SPECIES.creature_statifox.baseHp + level * 3, hp: SPECIES.creature_statifox.baseHp + level * 3 });
+    if (bench) {
+      const speciesId = 'creature_algobear', maxHp = SPECIES[speciesId].baseHp + 15;
+      state.party.push({ uid: 'exp-qa-algobear', speciesId, hp: maxHp, maxHp, focus: 8, level: 5, xp: 0 });
+      state.dex.species[speciesId].seen = true;
+      state.dex.species[speciesId].recruited = true;
+    }
+    if (kind === 'wild') { state.flags.rivalDefeated = true; state.quests.firstBond.status = 'complete'; }
+    state = act(state, { type: 'START_BATTLE', kind }).state;
+    state.battle.activeIndex = activeIndex;
+    state.battle.enemy.hp = enemyHp;
+    return state;
+  };
+  const inject = async state => {
+    await evaluate(`localStorage.setItem(${JSON.stringify(saveKey)}, ${JSON.stringify(serializeGame(state))})`);
+    await reloadGame();
+    await waitHeading(state.battle.kind === 'wild' ? 'Wild Voltkit encounter' : 'friendly challenge');
+  };
+  try {
+    const normal = fixture({ bench: true, activeIndex: 1 });
+    await inject(normal);
+    assertExpProgress(await expView('.battle-combatant[data-side="player"] .battle-stat'), { xp: 0, required: 100, remaining: 100, nextLevel: 6 });
+    await action('battle-move', '[data-id="observe_strike"]');
+    await checkInitialRewardFocus();
+    const normalResult = await saved();
+    assert.equal(normalResult.party[1].xp, 30, 'The active Databeast must receive the rival reward');
+    assert.equal(normalResult.party[0].xp, 0, 'A benched starter must not receive another Databeast\'s EXP');
+    const normalExpected = { earned: 30, name: 'Algobear', xp: 30, required: 100, remaining: 70, nextLevel: 6 };
+    await checkProgressionResult(normalExpected);
+    await evaluate(`document.querySelector('.battle-progression').scrollIntoView({ block: 'start', behavior: 'instant' })`);
+    await screenshot('battle-exp-desktop.png');
+    await checkProgressionResult(normalExpected, true);
+    await evaluate(`document.querySelector('.battle-progression').scrollIntoView({ block: 'start', behavior: 'instant' })`);
+    await screenshot('battle-exp-mobile.png', true);
+    await checkProgressionResult(normalExpected, true, 320);
+
+    const threshold = fixture({ xp: 90, bench: true });
+    await inject(threshold);
+    assertExpProgress(await expView('.battle-combatant[data-side="player"] .battle-stat'), { xp: 90, required: 100, remaining: 10, nextLevel: 6 });
+    await action('battle-move', '[data-id="observe_strike"]');
+    await checkInitialRewardFocus();
+    const leveled = await saved();
+    assert.deepEqual({ level: leveled.party[0].level, xp: leveled.party[0].xp, maxHp: leveled.party[0].maxHp }, { level: 6, xp: 20, maxHp: 50 }, 'A threshold victory must retain leftover EXP and the actual new stats');
+    assert.equal(leveled.party[1].xp, 0, 'Level-up rewards must apply only to their recipient');
+    const levelExpected = { earned: 30, name: 'Statifox', xp: 20, required: 120, remaining: 100, nextLevel: 7, levels: [6] };
+    const levelView = await checkProgressionResult(levelExpected);
+    assert.ok(levelView.notices[0].stats.some(stat => /Max HP\s*47\s*→\s*50\s*\(\+3\)/i.test(stat)), 'A level-up notice must show the actual maximum HP increase');
+    assert.ok(levelView.notices[0].stats.some(stat => /Attack(?: strength)?\s*8\s*→\s*9\s*\(\+1\)/i.test(stat)), 'A level-up notice must show a changed attack stat');
+    await evaluate(`document.querySelector('.battle-progression').scrollIntoView({ block: 'start', behavior: 'instant' })`);
+    await screenshot('battle-level-up.png');
+    await checkProgressionResult(levelExpected, true);
+    await evaluate(`document.querySelector('.battle-progression').scrollIntoView({ block: 'start', behavior: 'instant' })`);
+    await screenshot('battle-level-up-mobile.png', true);
+    await checkProgressionResult(levelExpected, true, 320);
+    await evaluate(`document.querySelector('[data-action="dialogue-next"]').focus({ preventScroll: true })`);
+    await action('dialogue-next');
+    assert.equal(await evaluate(`document.activeElement?.dataset.action`), 'dialogue-next', 'Advancing result dialogue must preserve focus on Next instead of refocusing rewards');
+    await finishDialogue();
+    assert.deepEqual(await saved(), leveled, 'Reading result dialogue must not award EXP again');
+    await reloadGame();
+    assert.deepEqual(await saved(), leveled, 'A reload after battle must preserve EXP and level gains without repeating rewards');
+    const partySelector = `.party-card[data-uid="${leveled.party[0].uid}"]`;
+    for (const width of [1440, 390, 320]) {
+      await cdp('Emulation.setDeviceMetricsOverride', { width, height: width === 1440 ? 1050 : 844, deviceScaleFactor: 1, mobile: width !== 1440 });
+      await sleep(100);
+      const party = await expView(partySelector);
+      assertExpProgress(party, levelExpected);
+      assert.equal(party.pageFits && !party.overflow && !party.textEscapes, true, `${width}px party EXP must remain readable after reload`);
+    }
+    await click('#save-button');
+    await action('save');
+    await action('load');
+    assert.deepEqual(await saved(), leveled, 'Manual save/load must preserve the earned level and EXP without duplication');
+    await close();
+
+    for (const outcome of ['wild-ko', 'bond', 'defeat', 'flee', 'cap']) {
+      const state = fixture({ kind: ['wild-ko', 'bond', 'flee'].includes(outcome) ? 'wild' : 'rival', level: outcome === 'cap' ? 50 : 5, enemyHp: outcome === 'defeat' ? 59 : 1 });
+      if (outcome === 'defeat') state.party[0].hp = 1;
+      if (outcome === 'bond') { state.battle.scanned = true; state.battle.bondAttempts = 4; }
+      await inject(state);
+      await action(outcome === 'bond' ? 'bond' : outcome === 'defeat' ? 'guard' : outcome === 'flee' ? 'flee' : 'battle-move', ['wild-ko', 'cap'].includes(outcome) ? '[data-id="observe_strike"]' : '');
+      await checkInitialRewardFocus();
+      const result = await saved();
+      assert.equal(result.battle, null, `${outcome} fixture must end its encounter`);
+      const earned = ['wild-ko', 'bond'].includes(outcome) ? 18 : outcome === 'cap' ? 30 : 0;
+      assert.equal(result.party[0].xp, state.party[0].xp + earned, `${outcome} must award the correct EXP exactly once`);
+      assert.equal(result.party[0].level, state.party[0].level, `${outcome} must not add an unearned level`);
+      const expected = { earned, name: earned ? 'Statifox' : undefined, ...(earned ? { xp: earned, required: 100, remaining: 100 - earned, nextLevel: 6 } : {}), ...(outcome === 'cap' ? { cap: true } : {}), ...(outcome === 'defeat' ? { reason: /defeat|lost|no EXP/i } : outcome === 'flee' ? { reason: /left|leav|escap|no EXP/i } : {}) };
+      await checkProgressionResult(expected);
+      await checkProgressionResult(expected, true, 320);
+      if (outcome === 'bond') assert.equal(result.party[1].xp, 0, 'A newly bonded partner must not also receive the active Databeast\'s reward');
+      if (outcome === 'cap') assert.equal(result.party[0].maxHp, 182, 'A level-capped Databeast must not receive an extra maximum HP increase');
+    }
+
+    const legacy = fixture({ xp: 260 });
+    for (const width of [320, 390]) {
+      await cdp('Emulation.setDeviceMetricsOverride', { width, height: 844, deviceScaleFactor: 1, mobile: true });
+      await inject(legacy);
+      await action('battle-move', '[data-id="observe_strike"]');
+      await checkInitialRewardFocus();
+      const multi = await saved();
+      assert.deepEqual({ level: multi.party[0].level, xp: multi.party[0].xp, maxHp: multi.party[0].maxHp }, { level: 7, xp: 70, maxHp: 53 }, 'Legacy EXP above a threshold must apply all earned levels and preserve the remainder');
+      const multiView = await checkProgressionResult({ earned: 30, name: 'Statifox', xp: 70, required: 140, remaining: 70, nextLevel: 8, levels: [6, 7] }, true, width);
+      assert.ok(multiView.notices[0].stats.some(stat => /Max HP\s*47\s*→\s*50\s*\(\+3\)/i.test(stat)), 'The first level-up must report its own stat change');
+      assert.ok(multiView.notices[1].stats.some(stat => /Max HP\s*50\s*→\s*53\s*\(\+3\)/i.test(stat)), 'The second level-up must report its own stat change');
+      assert.equal(multiView.notices[1].stats.some(stat => /Attack/i.test(stat)), false, 'An unchanged attack stat must not be reported as a gain');
+    }
+    checks.push('Battle EXP: active recipient versus bench, rival30/wildKO18/bond18/defeat0/flee0, exact EXP bars and remaining totals, level5→6 HP/attack gains, maximum level, multiple legacy levels, initial rewards focus and visible heading, preserved result-dialogue focus, desktop/390px/320px fit and party/manual-save/reload persistence without duplicate rewards');
+  } finally {
+    await evaluate(`localStorage.setItem(${JSON.stringify(saveKey)}, ${JSON.stringify(JSON.stringify(original))})`);
+    await cdp('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1050, deviceScaleFactor: 1, mobile: false });
+    await reloadGame();
   }
 }
 
@@ -579,6 +855,251 @@ async function checkBattleMessages() {
   }
 }
 
+const musicState = () => evaluate(`(() => {
+  const status = document.querySelector('#music-status');
+  return status && { scene: status.dataset.scene, status: status.dataset.status, ducked: status.dataset.ducked === 'true', gain: Number(status.dataset.effectiveGain),
+    text: status.textContent.trim(), enabled: document.querySelector('#music-toggle-button')?.getAttribute('aria-pressed'), volume: Number(document.querySelector('#music-volume')?.value),
+    controls: [...document.querySelectorAll('[data-music-control]')].map(control => ({ enabled: control.querySelector('[data-music-action="toggle"]')?.getAttribute('aria-pressed'), volume: Number(control.querySelector('[data-music-action="volume"]')?.value), output: control.querySelector('[data-music-volume-value]')?.textContent.trim() })) };
+})()`);
+
+async function waitMusic(scene, status) {
+  return eventually(async () => { const state = await musicState(); return state?.scene === scene && (!status || state.status === status) && state; }, `Music did not enter ${scene}${status ? ` (${status})` : ''}`);
+}
+
+async function checkMusicFileSource(scene) {
+  const audio = await evaluate('window.__audioTest.snapshot()');
+  const current = audio.contexts[0]?.sources.findLast(source => source.live);
+  assert.ok(current?.decodedFromFile && current.decodedTrack === scene && current.encodedByteLength === musicTrackSizes[scene], `${scene} playback must select its own decoded MP3 rather than a different scene or generated replacement`);
+  assert.ok(audio.decodes.some(decode => decode.context === 0 && decode.track === scene && decode.byteLength === musicTrackSizes[scene] && decode.mp3), `${scene} playback must decode the actual bundled MP3 bytes`);
+}
+
+const musicFileLoads = scene => evaluate(`({ fetches: window.__audioTest.fetches.filter(request => request.track === ${JSON.stringify(scene)}).length, decodes: window.__audioTest.decodes.filter(decode => decode.context === 0 && decode.track === ${JSON.stringify(scene)}).length })`);
+
+async function checkBackgroundMusic() {
+  await cdp('Page.navigate', { url });
+  await waitHeading('Every adventure');
+  const before = await saved();
+  try {
+    const initial = await musicState();
+    assert.ok(initial, 'Persistent background music controls must be available');
+    assert.equal(initial.enabled, 'true', 'Background music must default to enabled');
+    assert.equal(initial.volume, 30, 'Background music must default to 30 percent volume');
+    assert.equal(await evaluate('window.__audioTest.contexts.length'), 0, 'Loading the game must not open an AudioContext before a user gesture');
+    assert.equal(await evaluate('window.__audioTest.fetches.length'), 0, 'Loading the game must not download music before a user gesture');
+    await pressKey('Shift', 'ShiftLeft', 16);
+    await waitMusic('village', 'playing');
+    await checkMusicFileSource('village');
+    assert.equal(await evaluate('window.__audioTest.contexts.length'), 1, 'The first gesture must lazily open one music context');
+    const setVolume = value => evaluate(`(() => { const input = document.querySelector('#music-volume'); input.value = ${value}; input.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+    await setVolume(65);
+    let state = await musicState();
+    assert.equal(state.volume, 65);
+    assert.ok(state.controls.length >= 2 && state.controls.every(control => control.enabled === 'true' && control.volume === 65), 'Footer and modal music controls must stay synchronized');
+    assert.deepEqual(await saved(), before, 'Music volume must not change gameplay saves');
+    await setVolume(0);
+    assert.equal((await musicState()).gain, 0, 'Zero volume must be silent without changing gameplay');
+    await setVolume(65);
+    await waitMusic('village', 'playing');
+    assert.equal(await evaluate('window.__audioTest.decodes.length'), 1, 'Changing volume must reuse the decoded village buffer');
+    await click('#modal-root [data-music-action="toggle"]');
+    assert.equal((await musicState()).enabled, 'false', 'Modal music controls must be able to mute playback');
+    assert.deepEqual(await evaluate(`JSON.parse(localStorage.getItem(${JSON.stringify(musicPreferenceKey)}))`), { enabled: false, volume: .65 }, 'Music preferences must be stored separately from game progress');
+    assert.deepEqual(await saved(), before, 'Muting music must not change gameplay saves');
+    await reloadGame();
+    await waitHeading('Every adventure');
+    assert.equal((await musicState()).enabled, 'false', 'Mute preference must survive reload');
+    assert.equal((await musicState()).volume, 65, 'Music volume preference must survive reload');
+    assert.equal(await evaluate('window.__audioTest.contexts.length'), 0, 'A muted reload must not initialize audio hardware');
+    await click('#modal-root [data-music-action="toggle"]');
+    await waitMusic('village', 'playing');
+    await checkMusicFileSource('village');
+    for (const width of [1440, 390, 320]) {
+      await cdp('Emulation.setDeviceMetricsOverride', { width, height: width === 1440 ? 1050 : 844, deviceScaleFactor: 1, mobile: width !== 1440 });
+      await sleep(100);
+      assert.equal(await evaluate(`document.documentElement.scrollWidth <= innerWidth && [...document.querySelectorAll('[data-music-control]')].every(control => { const bounds = control.getBoundingClientRect(); return bounds.left >= 0 && bounds.right <= innerWidth && control.scrollWidth <= control.clientWidth + 1; })`), true, `${width}px music controls must fit without overlap or horizontal overflow`);
+    }
+
+    const controller = await evaluate(`(async () => {
+      const { createMusicController, MUSIC_MASTER_LEVEL } = await import('/music.js');
+      const storage = { getItem: () => null, setItem() {} };
+      const contextId = window.__audioTest.contexts.length;
+      const music = window.__musicControllerTest = createMusicController({ storage, fetchAudio: null });
+      music.setScene('forest');
+      const lazy = window.__audioTest.contexts.length === contextId;
+      await music.unlock();
+      const started = music.getState();
+      music.setDialogueActive(true);
+      const dialogue = music.getState();
+      music.setNarrating(true);
+      const narration = music.getState();
+      music.setNarrating(false);
+      const restored = music.getState();
+      music.setDialogueActive(false);
+      const base = music.getState();
+      music.setScene('battle');
+      const fading = window.__audioTest.snapshot().contexts[contextId];
+      music.setScene('mystery'); music.setScene('celebration');
+      window.__audioTest.advance(2);
+      const settled = window.__audioTest.snapshot().contexts[contextId];
+      const count = settled.sources.length;
+      music.setScene('celebration'); music.setScene('celebration');
+      const repeated = window.__audioTest.snapshot().contexts[contextId].sources.length;
+      music.setHidden(true);
+      const hidden = { state: music.getState(), audio: window.__audioTest.snapshot().contexts[contextId] };
+      await music.setHidden(false);
+      await new Promise(resolve => setTimeout(resolve, 0));
+      const visible = music.getState();
+      music.destroy();
+      return { contextId, masterLevel: MUSIC_MASTER_LEVEL, lazy, started, dialogue, narration, restored, base, fading, settled, count, repeated, hidden, visible, closed: window.__audioTest.snapshot().contexts[contextId], events: window.__audioTest.events.filter(event => event.context === contextId) };
+    })()`);
+    assert.equal(controller.lazy, true, 'Selecting a scene must not create audio before an unlock gesture');
+    assert.equal(controller.started.playing, true, 'Unlock must start the selected scene');
+    assert.ok(controller.masterLevel > 0 && controller.masterLevel <= 1, 'Music must expose its nominal master gain');
+    for (const [name, factor] of [['dialogue', .45], ['narration', .2], ['restored', .45], ['base', 1]]) assert.ok(Math.abs(controller[name].effectiveGain - controller.masterLevel * .3 * factor) < 1e-9, `${name} must use the intended music ducking level`);
+    assert.ok(controller.fading.sources.some(source => source.stopAt > controller.fading.currentTime) && controller.fading.sources.filter(source => source.live).length >= 2, 'Track changes must overlap the outgoing and incoming sources during a crossfade');
+    assert.ok(controller.events.some(event => event.method === 'linear' && event.value === 0) && controller.events.some(event => event.method === 'linear' && event.value > 0), 'Scene transitions must schedule gain ramps instead of abrupt cuts');
+    assert.equal(controller.settled.sources.filter(source => source.live).length, 1, 'Rapid scene changes must retire old loops and leave one current source');
+    assert.equal(controller.repeated, controller.count, 'Re-rendering the same scene must not create duplicate loops');
+    assert.equal(controller.hidden.audio.state, 'suspended', 'Hidden pages must suspend their audio context');
+    assert.equal(controller.hidden.audio.sources.filter(source => source.live).length, 0, 'Hidden pages must stop scheduled music sources');
+    assert.equal(controller.visible.playing, true, 'A visible, previously unlocked page must resume its scene');
+    assert.equal(controller.closed.sources.filter(source => source.live).length, 0, 'Destroying a music controller must retire its sources');
+
+    let village = act(createGame(), { type: 'CHOOSE_STARTER', speciesId: 'creature_statifox' }).state;
+    village.flags.rivalDefeated = true;
+    village.quests.firstBond.status = 'complete';
+    const inject = async (fixture, scene) => {
+      await evaluate(`localStorage.setItem(${JSON.stringify(saveKey)}, ${JSON.stringify(serializeGame(fixture))})`);
+      await reloadGame();
+      await waitMusic(scene);
+      await pressKey('Shift', 'ShiftLeft', 16);
+      await waitMusic(scene, 'playing');
+    };
+    const battle = act(village, { type: 'START_BATTLE', kind: 'rival' }).state;
+    battle.battle.enemy.hp = 1;
+    await inject(battle, 'battle');
+    await checkMusicFileSource('battle');
+    assert.deepEqual(await musicFileLoads('battle'), { fetches: 1, decodes: 1 }, 'Battle music must load and decode its file once');
+    const sourcesBeforeMenus = await evaluate('window.__audioTest.snapshot().contexts[0].sources.length');
+    await action('dex');
+    await waitMusic('battle', 'playing');
+    await click('#modal-root [data-action="close"]');
+    await waitHeading('friendly challenge');
+    await action('save-menu');
+    await waitMusic('battle', 'playing');
+    await click('#modal-root [data-action="close"]');
+    await waitHeading('friendly challenge');
+    assert.equal(await evaluate('window.__audioTest.snapshot().contexts[0].sources.length'), sourcesBeforeMenus, 'Battle music must continue through DataDex and save menus without restarting');
+    assert.deepEqual(await musicFileLoads('battle'), { fetches: 1, decodes: 1 }, 'Battle menus must reuse the decoded battle file');
+    await action('battle-move', '[data-id="observe_strike"]');
+    await waitMusic('celebration', 'playing');
+    await checkMusicFileSource('celebration');
+    const resultSources = await evaluate('window.__audioTest.snapshot().contexts[0].sources.length');
+    await finishDialogue();
+    assert.equal(await evaluate('window.__audioTest.snapshot().contexts[0].sources.length'), resultSources, 'Result dialogue changes must keep one celebration theme');
+    await close();
+    await waitMusic('village', 'playing');
+    await checkMusicFileSource('village');
+    const villageLoads = await musicFileLoads('village');
+    await visit('sanctuary', 'catch your breath');
+    await waitMusic('rest', 'playing');
+    await checkMusicFileSource('rest');
+    await close();
+    await waitMusic('village', 'playing');
+    await checkMusicFileSource('village');
+    assert.deepEqual(await musicFileLoads('village'), villageLoads, 'Returning to the village must reuse its downloaded and decoded MP3');
+    for (const scene of ['battle', 'celebration', 'village', 'rest']) assert.deepEqual(await musicFileLoads(scene), { fetches: 1, decodes: 1 }, 'Each scene must maintain an independent one-file cache');
+
+    const forest = structuredClone(village);
+    forest.map = 'forest'; forest.player.x = 3; forest.player.y = 11;
+    await inject(forest, 'forest');
+    await checkMusicFileSource('forest');
+    await visit('inferra', 'nocturnal');
+    await waitMusic('mystery', 'playing');
+    await checkMusicFileSource('mystery');
+    const storySources = await evaluate('window.__audioTest.snapshot().contexts[0].sources.length');
+    await finishDialogue();
+    assert.equal(await evaluate('window.__audioTest.snapshot().contexts[0].sources.length'), storySources, 'A major story conversation must retain its theme across speaker changes');
+    await close();
+    await waitMusic('forest', 'playing');
+    await checkMusicFileSource('forest');
+    for (const scene of ['forest', 'mystery']) assert.deepEqual(await musicFileLoads(scene), { fetches: 1, decodes: 1 }, 'Story transitions must keep forest and mystery file caches independent');
+    forest.time = 'night';
+    await inject(forest, 'night');
+    await checkMusicFileSource('night');
+    await visit('camp', 'Wait for');
+    await waitMusic('rest', 'playing');
+    await checkMusicFileSource('rest');
+    await close();
+    await waitMusic('night', 'playing');
+    await checkMusicFileSource('night');
+    await visit('camp', 'Wait for');
+    await waitMusic('rest', 'playing');
+    await checkMusicFileSource('rest');
+    await finishDialogue();
+    await action('change-time');
+    await waitMusic('forest', 'playing');
+    await checkMusicFileSource('forest');
+    for (const scene of ['night', 'rest', 'forest']) assert.deepEqual(await musicFileLoads(scene), { fetches: 1, decodes: 1 }, 'Day/night and camp transitions must reuse each scene\'s own file cache');
+    const beforeHidden = await saved();
+    await evaluate('window.__audioTest.setHidden(true)');
+    await eventually(() => evaluate(`window.__audioTest.snapshot().contexts[0].state === 'suspended'`), 'Hidden game page did not suspend music');
+    await evaluate('window.__audioTest.setHidden(false)');
+    await waitMusic('forest', 'playing');
+    await checkMusicFileSource('forest');
+    assert.deepEqual(await musicFileLoads('forest'), { fetches: 1, decodes: 1 }, 'Resuming a hidden page must reuse its decoded scene file');
+    assert.deepEqual(await saved(), beforeHidden, 'Visibility changes must not modify game progress');
+
+    const musicFiles = [];
+    // Separate sequential evaluations release each decoded PCM buffer before
+    // inspecting the next full-length track; no hardware output is opened.
+    for (const id of musicTrackIds) {
+      const file = await evaluate(`(async () => {
+        const response = await fetch(${JSON.stringify(`/music/${id}.mp3`)});
+        const encoded = await response.arrayBuffer();
+        const context = new OfflineAudioContext(2, 1, 22050);
+        const buffer = await context.decodeAudioData(encoded.slice(0));
+        const channels = [];
+        for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
+          const samples = buffer.getChannelData(channel);
+          let peak = 0, power = 0, finite = true;
+          for (let i = 0; i < samples.length; i++) { const sample = samples[i]; finite &&= Number.isFinite(sample); peak = Math.max(peak, Math.abs(sample)); power += sample * sample; }
+          channels.push({ finite, peak, rms: Math.sqrt(power / samples.length), samples: samples.length });
+        }
+        return { ok: response.ok, contentType: response.headers.get('content-type'), bytes: encoded.byteLength, duration: buffer.duration, sampleRate: buffer.sampleRate, channels };
+      })()`);
+      assert.equal(file.ok, true, `The bundled ${id} MP3 must be served successfully`);
+      assert.match(file.contentType, /^audio\/mpeg(?:;|$)/i, `The ${id} MP3 must use the MPEG audio content type`);
+      assert.equal(file.bytes, musicTrackSizes[id], `The served ${id} MP3 must contain the complete bundled asset`);
+      assert.ok(file.duration > 1 && file.duration < 3600 && file.channels.length >= 1 && file.channels.length <= 2, `The ${id} MP3 must decode to a finite playable duration and supported channel count`);
+      assert.ok(file.channels.every(channel => channel.finite && channel.peak > .005 && channel.peak < 1.25 && channel.rms > .001 && Math.abs(channel.samples - file.duration * file.sampleRate) <= 1), `The ${id} MP3 must decode to non-silent finite audio samples within plausible PCM bounds`);
+      musicFiles.push({ id, ...file });
+    }
+
+    const waveforms = await evaluate(`(async () => {
+      const { renderMusicTrack } = await import('/music-tracks.js');
+      const results = [];
+      for (const id of ['village', 'forest', 'night', 'battle', 'mystery', 'celebration', 'rest']) {
+        const context = new OfflineAudioContext(1, 44100, 22050);
+        const source = context.createBufferSource();
+        source.buffer = renderMusicTrack(context, id); source.connect(context.destination); source.start();
+        const rendered = await context.startRendering(), samples = rendered.getChannelData(0);
+        let peak = 0, power = 0, finite = true, hash = 2166136261;
+        for (let i = 0; i < samples.length; i++) { const sample = samples[i]; finite &&= Number.isFinite(sample); peak = Math.max(peak, Math.abs(sample)); power += sample * sample; if (i % 17 === 0) hash = Math.imul(hash ^ (Math.round(sample * 32767) & 65535), 16777619) >>> 0; }
+        results.push({ id, finite, peak, rms: Math.sqrt(power / samples.length), hash });
+      }
+      return results;
+    })()`);
+    assert.ok(waveforms.every(track => track.finite && track.peak > .005 && track.peak <= 1 && track.rms > .001), 'Each track must render a non-silent, finite waveform within the audio range');
+    assert.equal(new Set(waveforms.map(track => track.hash)).size, 7, 'Every scene must render a distinct original music phrase');
+    await writeFile(resolve(artifactDir, 'music-smoke.json'), JSON.stringify({ status: 'passed', musicFiles, villageFile: musicFiles.find(file => file.id === 'village'), waveforms, verification: 'Mocked output context tracks each requested MP3; native OfflineAudioContext sequentially decodes all seven actual files and renders procedural fallback samples. No audible-output claim.' }, null, 2));
+    checks.push('Background music: gesture-only initialization/download, all seven matching MP3s selected by live UI scenes with independent fetch/decode cache reuse, native offline format/size/duration/channel/PCM validation for every file, synced volume/mute and separate reload preferences, crossfade ramps, rapid-transition cleanup, no duplicate loops, dialogue/narration ducking, battle menus/story/result/map/day-night transitions, hidden pause/resume, mobile fit and procedural fallback rendering (no audible-output claim)');
+  } finally {
+    await evaluate('window.__audioTest.setHidden(false); localStorage.clear()');
+    await cdp('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1050, deviceScaleFactor: 1, mobile: false });
+  }
+}
+
 async function checkSpokenDialogue() {
   // Headless machines may have no audio device. Mock the browser speech API so
   // this checks real UI synchronization deterministically, not audible output.
@@ -611,15 +1132,44 @@ async function checkSpokenDialogue() {
     const first = await dialogue();
     assert.equal((await speech()).count, 0, 'Spoken dialogue must be off until the player enables it');
     assert.equal(await evaluate(`document.querySelector('#speech-toggle-button').getAttribute('aria-pressed')`), 'false');
+    assert.equal(await evaluate(`document.activeElement?.dataset.action`), 'dialogue-next', 'Opening unfinished dialogue must focus Next instead of a music control');
+    await pressKey('Shift', 'ShiftLeft', 16);
+    const dialogueMusic = await waitMusic('village', 'playing');
+    assert.ok(dialogueMusic.ducked && dialogueMusic.gain > 0, 'Music must soften while a dialogue is open');
+    const beforeKeyboardMusic = await saved();
+    await evaluate(`window.__musicKeyboardToggle = document.querySelector('#modal-root [data-music-action="toggle"]'); window.__musicKeyboardToggle.focus()`);
+    for (const [key, code, virtualKey, enabled] of [['Enter', 'Enter', 13, 'false'], [' ', 'Space', 32, 'true']]) {
+      await pressKey(key, code, virtualKey);
+      assert.equal((await musicState()).enabled, enabled, `${code} must activate the focused modal music toggle`);
+      assert.deepEqual(await dialogue(), first, `${code} on a music control must not advance unfinished dialogue`);
+      assert.equal(await evaluate(`document.activeElement === window.__musicKeyboardToggle`), true, 'Keyboard music toggles must preserve focus on the same control');
+    }
+    await waitMusic('village', 'playing');
+    await evaluate(`document.querySelector('#modal-music-volume').focus()`);
+    await pressKey('ArrowRight', 'ArrowRight', 39);
+    assert.equal((await musicState()).volume, dialogueMusic.volume + 1, 'The focused music slider must support keyboard volume changes');
+    assert.deepEqual(await dialogue(), first, 'Keyboard volume changes must not advance unfinished dialogue');
+    assert.equal(await evaluate(`document.activeElement?.id`), 'modal-music-volume', 'Keyboard volume changes must preserve slider focus');
+    await pressKey('ArrowLeft', 'ArrowLeft', 37);
+    assert.equal((await musicState()).volume, dialogueMusic.volume, 'Keyboard volume changes must be reversible');
+    await evaluate(`window.__audioTest.contexts[0].suspend()`);
+    await waitMusic('village', 'retry');
+    await evaluate(`document.querySelector('#modal-root [data-music-action="retry"]').focus()`);
+    await pressKey('Enter', 'Enter', 13);
+    await waitMusic('village', 'playing');
+    assert.deepEqual(await dialogue(), first, 'Retrying interrupted music with Enter must not advance unfinished dialogue');
+    assert.deepEqual(await saved(), beforeKeyboardMusic, 'Keyboard music controls and retry must preserve gameplay progress');
     await action('speech-toggle');
     const firstSpeech = await speech();
     assert.equal(firstSpeech.count, 1);
     assert.equal(firstSpeech.text, first.line, 'Speech must use exactly the visible dialogue text');
     assert.ok(firstSpeech.voice, 'An available installed voice must be assigned');
+    assert.ok(Math.abs((await musicState()).gain - dialogueMusic.gain * .2 / .45) < 1e-9, 'Active narration must duck music below its dialogue-only level');
     const gameBeforeSpeech = await saved();
     await evaluate(`window.__originalDialogueBox = document.querySelector('.dialogue-box'); document.querySelector('[data-action="speech-skip"]').focus()`);
     await action('speech-skip');
     assert.ok((await speech()).canceled > firstSpeech.canceled, 'Skip voice must stop speech');
+    assert.ok(Math.abs((await musicState()).gain - dialogueMusic.gain) < 1e-9, 'Skipping narration must restore the dialogue music level');
     assert.deepEqual(await dialogue(), first, 'Skipping voice must not advance or close the visible segment');
     assert.equal(await evaluate(`document.querySelector('.dialogue-box') === window.__originalDialogueBox`), true, 'Speech controls must not rebuild the conversation');
     assert.equal(await evaluate(`document.activeElement?.dataset.action`), 'speech-skip', 'Playback state changes must preserve keyboard focus');
@@ -641,7 +1191,9 @@ async function checkSpokenDialogue() {
     assert.notDeepEqual([secondSpeech.rate, secondSpeech.pitch], [firstSpeech.rate, firstSpeech.pitch], 'Character delivery must also distinguish speakers');
     await evaluate(`window.__speechTest.spoken[1].end?.(); window.__speechTest.spoken[1].error?.({ error: 'interrupted' })`);
     assert.equal(await evaluate(`document.querySelector('[data-action="speech-skip"]').getAttribute('aria-disabled')`), 'false', 'A stale callback must not stop the current speaker');
+    assert.ok((await musicState()).gain < dialogueMusic.gain, 'A stale voice callback must not restore music while another line is speaking');
     await evaluate(`window.__speechTest.spoken.at(-1).end?.()`);
+    assert.ok(Math.abs((await musicState()).gain - dialogueMusic.gain) < 1e-9, 'Finishing narration must restore the dialogue music level');
     assert.deepEqual(await dialogue(), second, 'Finishing speech must not advance dialogue');
     assert.equal((await speech()).count, secondSpeech.count);
     await action('dialogue-back');
@@ -657,6 +1209,7 @@ async function checkSpokenDialogue() {
     await pressKey('Escape', 'Escape', 27);
     assert.ok((await speech()).canceled > beforeClose.canceled, 'Closing a conversation must cancel speech');
     assert.equal(await dialogue(), null);
+    assert.equal((await musicState()).ducked, false, 'Closing dialogue must release the dialogue music reduction');
     await reloadGame();
     await eventually(() => evaluate(`document.querySelector('#speech-toggle-button')?.getAttribute('aria-pressed') === 'true'`), 'Voice preference must survive reload');
     assert.equal((await speech()).count, 0, 'Reloading without dialogue must not speak old content');
@@ -674,7 +1227,7 @@ async function checkSpokenDialogue() {
     assert.ok(await evaluate(`document.querySelector('#speech-status')?.textContent.trim()`), 'Unavailable speech needs a readable explanation');
     await action('dialogue-next');
     assert.notEqual((await dialogue()).line, unavailableFirst.line, 'Unsupported speech must not block normal dialogue progression');
-    checks.push('Optional spoken dialogue: exact visible text, character voices, Next/Back interruption, skip/replay/mute, stale callbacks, focus preservation, reload preferences and unsupported-browser progression (mock API; no audible-output claim)');
+    checks.push('Optional spoken dialogue: exact visible text, character voices, Next/Back interruption, skip/replay/mute, stale callbacks, focus preservation, music Enter/Space/slider/retry without dialogue advancement, narration music ducking/restoration, reload preferences and unsupported-browser progression (mock API; no audible-output claim)');
   } finally {
     if (unsupported) await cdp('Page.removeScriptToEvaluateOnNewDocument', { identifier: unsupported.identifier });
     else await cdp('Page.removeScriptToEvaluateOnNewDocument', { identifier: mock.identifier });
@@ -704,6 +1257,8 @@ try {
   await cdp('Page.enable');
   await cdp('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: downloadDir }, null);
   await cdp('Page.setInterceptFileChooserDialog', { enabled: true });
+  await cdp('Page.addScriptToEvaluateOnNewDocument', { source: audioMockSource });
+  await checkBackgroundMusic();
   await checkSpokenDialogue();
   await cdp('Page.navigate', { url });
   await waitHeading('Every adventure');
@@ -779,6 +1334,7 @@ try {
   await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
   await eventually(() => evaluate(`!document.querySelector('#modal-root .modal')`), 'Escape must close DataDex');
   checks.push('Responsive layout, WASD D movement, DataDex X shortcut, modal keyboard focus and Escape');
+  await checkBattleProgression();
   await checkBattleActionMenu();
   await checkBattleMessages();
   console.log('Initial desktop and mobile screenshots ready. Starting full Stage 1 walkthrough.');
@@ -1054,7 +1610,7 @@ try {
   checks.push('Sanctuary healing/restocking, DataDex field notes, export/new journey/import, final reload');
   await screenshot('completed.png');
   assert.deepEqual(errors, [], 'Browser runtime must have no errors');
-  await writeFile(resolve(artifactDir, 'browser-smoke.json'), JSON.stringify({ status: 'passed', url, checks, errors, screenshots: ['dialogue.png', 'dialogue-mobile.png', 'battle-desktop.png', 'battle-mobile.png', 'battle-actions-desktop.png', 'battle-actions-mobile.png', 'battle-actions-preview-mobile.png', 'inferra-dialogue.png', 'inferra-mobile.png', 'quest-journal.png', 'quest-journal-mobile.png', 'prototype.png', 'mobile.png', 'completed.png'] }, null, 2));
+  await writeFile(resolve(artifactDir, 'browser-smoke.json'), JSON.stringify({ status: 'passed', url, checks, errors, screenshots: ['dialogue.png', 'dialogue-mobile.png', 'battle-desktop.png', 'battle-mobile.png', 'battle-actions-desktop.png', 'battle-actions-mobile.png', 'battle-actions-preview-mobile.png', 'battle-exp-desktop.png', 'battle-exp-mobile.png', 'battle-level-up.png', 'battle-level-up-mobile.png', 'inferra-dialogue.png', 'inferra-mobile.png', 'quest-journal.png', 'quest-journal-mobile.png', 'prototype.png', 'mobile.png', 'completed.png'] }, null, 2));
   console.log(JSON.stringify({ status: 'passed', checks, errors }, null, 2));
 } catch (error) {
   errors.push(error.stack || error.message);

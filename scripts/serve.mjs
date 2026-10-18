@@ -11,7 +11,7 @@ if (!Number.isInteger(startingPort) || startingPort < 0 || startingPort > 65535)
 const instanceId = createHash('sha256').update(process.platform === 'win32' ? root.toLowerCase() : root).digest('hex');
 let port = startingPort;
 let attempts = 0;
-const types = {'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml'};
+const types = {'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml','.mp3':'audio/mpeg'};
 const server = http.createServer(async (req, res) => {
   res.setHeader('X-Chronicles-Instance', instanceId);
   try {

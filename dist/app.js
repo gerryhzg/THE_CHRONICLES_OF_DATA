@@ -5,6 +5,10 @@ import { resolveSpeaker, portraitMarkup } from './portraits.js';
 import { createSpeechController } from './speech.js';
 import { getQuestGuide, getJourneySteps, getMissingObservations } from './quests.js';
 import { getBattleActions } from './battle-actions.js';
+import { getExpProgress } from './progression.js';
+import { createMusicController } from './music.js';
+import { MUSIC_TRACKS } from './music-tracks.js';
+import { getMusicScene } from './music-scenes.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -46,8 +50,10 @@ let audioContext;
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 let synthesis = null;
 let Utterance = null;
+let music = null;
 try { synthesis = window.speechSynthesis; Utterance = window.SpeechSynthesisUtterance; } catch {}
 const speech = createSpeechController({synthesis, Utterance, storage, onChange:updateSpeechControls});
+music = createMusicController({storage,onChange:updateMusicControls});
 const speciesEntries = () => Object.entries(SPECIES);
 const habitats = () => Array.isArray(HABITATS) ? HABITATS : Object.values(HABITATS);
 const creatureName = (id) => SPECIES[id]?.name || id?.replace('creature_', '') || 'Databeast';
@@ -98,6 +104,58 @@ function updateSpeechControls() {
   }
   // Screen readers keep their usual dialogue announcements when game voices are off.
   $('dialogue-announcer').setAttribute('aria-live', enabled && supported ? 'off' : 'polite');
+  music?.setNarrating(status==='speaking');
+}
+
+function updateMusicControls(next=music?.getState()) {
+  if (!next) return;
+  const title=MUSIC_TRACKS[next.scene]?.title||'Background music';
+  const messages={
+    locked:'Music starts when you interact with the game.',
+    playing:`${title}${next.ducked?' · softer under dialogue':''}`,
+    paused:'Music paused while the game is away.', off:'Music is muted.',
+    muted:'Volume is 0%. Raise the slider to hear music.',
+    loading:`Loading ${title}…`,
+    idle:'Music is ready.', retry:'Music paused. Press Retry music to resume.',
+    unavailable:'Music is unavailable in this browser.', destroyed:'Music stopped.',
+  };
+  document.querySelectorAll('[data-music-action="toggle"]').forEach(button=>{
+    button.disabled=!next.supported;
+    button.textContent=next.supported?(next.enabled?'Music on':'Music off'):'Music unavailable';
+    button.setAttribute('aria-pressed',String(next.enabled));
+    button.setAttribute('aria-label',next.enabled?'Mute background music':'Enable background music');
+  });
+  const percentage=Math.round(next.volume*100);
+  document.querySelectorAll('[data-music-action="volume"]').forEach(input=>{
+    input.disabled=!next.supported;
+    if (Number(input.value)!==percentage) input.value=String(percentage);
+    input.setAttribute('aria-valuetext',`${percentage}% music volume`);
+  });
+  document.querySelectorAll('[data-music-volume-value]').forEach(output=>{output.textContent=`${percentage}%`;});
+  document.querySelectorAll('[data-music-status]').forEach(status=>{
+    status.textContent=next.status==='playing'&&next.source==='generated'&&next.error?`${title} · backup theme`:messages[next.status]||messages.idle;
+    status.dataset.scene=next.scene;
+    status.dataset.status=next.status;
+    status.dataset.ducked=String(next.ducked);
+    status.dataset.effectiveGain=String(next.effectiveGain);
+    status.dataset.source=next.source||'';
+  });
+  document.querySelectorAll('[data-music-action="retry"]').forEach(button=>{button.hidden=next.status!=='retry';});
+}
+
+function syncMusic() {
+  music.setDialogueActive(!!activeDialogue);
+  music.setNarrating(speech.getState().status==='speaking');
+  music.setScene(getMusicScene(state,{modal,modalData,dialogueActive:!!activeDialogue}));
+  updateMusicControls();
+}
+
+function modalMusicMarkup() {
+  return `<div class="modal-music-bar" data-music-control role="group" aria-label="Background music">
+    <button data-music-action="toggle" aria-pressed="true">Music on</button>
+    <label for="modal-music-volume">Music volume</label><input id="modal-music-volume" data-music-action="volume" type="range" min="0" max="100" step="1" value="30"><output for="modal-music-volume" data-music-volume-value>30%</output>
+    <button data-music-action="retry" hidden>Retry music</button><span class="music-status" data-music-status></span>
+  </div>`;
 }
 
 function speechControlsMarkup() {
@@ -114,7 +172,7 @@ function chime(kind = 'action') {
     oscillator.type = 'triangle';
     oscillator.frequency.setValueAtTime(kind === 'success' ? 660 : 440, audioContext.currentTime);
     oscillator.frequency.exponentialRampToValueAtTime(kind === 'success' ? 990 : 550, audioContext.currentTime + .14);
-    gain.gain.setValueAtTime(.035, audioContext.currentTime);
+    gain.gain.setValueAtTime(activeDialogue ? .012 : .035, audioContext.currentTime);
     gain.gain.exponentialRampToValueAtTime(.001, audioContext.currentTime + .2);
     oscillator.connect(gain).connect(audioContext.destination);
     oscillator.start(); oscillator.stop(audioContext.currentTime + .2);
@@ -149,11 +207,12 @@ function dispatch(action, {quiet = false} = {}) {
       const won = before.battle.kind === 'rival' && (result.events || []).some(event => event.startsWith('Kai:'));
       const recruited = !before.flags.recruitedVoltkit && state.flags.recruitedVoltkit;
       modal = 'battle-result';
-      modalData = {won, recruited, events:result.events || [],kind:before.battle.kind,battleEvents:result.battleEvents || []};
+      modalData = {won, recruited, events:result.events || [],kind:before.battle.kind,battleEvents:result.battleEvents || [],progression:result.battleProgression};
       activeDialogue = prepareDialogue(modal,modalData);
       chime(won || recruited ? 'success' : 'action');
     }
     if (modal) renderModal();
+    syncMusic();
     return true;
   } catch (error) { toast(error.message || 'That action is not available yet.'); return false; }
 }
@@ -198,7 +257,7 @@ function updateUI() {
     return `<li class="${s.done ? 'done' : s.current ? 'current' : ''}"><span class="step-circle">${s.done ? '✓' : i+1}</span>${esc(s.title)}</li>`;
   }).join('');
   $('party-count').textContent = `${state.party.length} / 4`;
-  $('party-grid').innerHTML = state.party.map(c => `<div class="party-card">${portrait(c.speciesId,80)}<div><h3>${esc(creatureName(c.speciesId))}</h3><p>Lv. ${c.level} · ${c.hp}/${c.maxHp} HP</p><div class="mini-hp"><i style="width:${Math.max(0,c.hp/c.maxHp*100)}%"></i></div></div></div>`).join('') + Array.from({length:Math.max(0,4-state.party.length)}, () => '<div class="party-card empty"><span>+</span><small>A bond to discover</small></div>').join('');
+  $('party-grid').innerHTML = state.party.map(c => `<div class="party-card" data-uid="${esc(c.uid)}">${portrait(c.speciesId,80)}<div class="party-card-copy"><h3>${esc(creatureName(c.speciesId))}</h3><p>Lv. ${c.level} · ${c.hp}/${c.maxHp} HP</p><div class="mini-hp"><i style="width:${Math.max(0,c.hp/c.maxHp*100)}%"></i></div>${expProgressMarkup(c,true)}</div></div>`).join('') + Array.from({length:Math.max(0,4-state.party.length)}, () => '<div class="party-card empty"><span>+</span><small>A bond to discover</small></div>').join('');
   $('supplies').innerHTML = `<span title="Healing potions"><b>♧</b> ${state.inventory.potions} potions</span><span title="Bond Crystals"><b>◇</b> ${state.inventory.bondCrystals} crystals</span><span title="Aether Coins"><b>◉</b> ${state.coins || 0}</span>`;
   $('investigation-button').innerHTML = `Quest journal <span>↗</span>`;
   if (!savingAvailable) $('save-status').textContent = 'Automatic saving unavailable · Export a save in Save & load';
@@ -302,6 +361,7 @@ function closeModal() {
   battleLogObserver?.disconnect();
   battleLogObserver=null;
   modal=null; modalData={}; activeDialogue=null; $('modal-root').innerHTML=''; $('dialogue-announcer').textContent=''; updatePrompt();
+  syncMusic();
   if (returnFocus?.isConnected) returnFocus.focus({preventScroll:true}); else $('world').focus({preventScroll:true});
 }
 
@@ -389,7 +449,8 @@ function conversationModal() {
   const title=modalData.title || titles[modal] || conversation.title;
   const subtitle=modalData.subtitle || conversation.subtitle;
   const battleRecap=modal==='battle-result'&&modalData.battleEvents?.length?battleTimeline(modalData.battleEvents,true):'';
-  return modalShell(title,subtitle,dialogueMarkup()+battleRecap+conversationActions(),{wide:modal==='starters'||modal==='battle-result'});
+  const progression=modal==='battle-result'&&modalData.progression?battleProgressionMarkup(modalData.progression):'';
+  return modalShell(title,subtitle,progression+dialogueMarkup()+battleRecap+conversationActions(),{wide:modal==='starters'||modal==='battle-result'});
 }
 
 function moveDialogue(direction) {
@@ -400,11 +461,12 @@ function moveDialogue(direction) {
 }
 
 function modalShell(title, subtitle, body, {wide=false,battle=false}={}) {
-  return `<div class="modal-backdrop"><section class="modal ${wide?'wide':''}" role="dialog" aria-modal="true" aria-labelledby="modal-heading"><div class="modal-top"><div><p class="eyebrow">${esc(subtitle)}</p><h2 id="modal-heading">${esc(title)}</h2></div>${battle?'<div class="battle-menu"><button data-action="dex" aria-label="Open DataDex">▧ DataDex</button><button data-action="save-menu" aria-label="Open save and load">↓ Save & load</button></div>': '<button class="close-modal" data-action="close" aria-label="Close dialog">×</button>'}</div>${battle ? body : `<div class="modal-content">${body}</div>`}</section></div>`;
+  return `<div class="modal-backdrop"><section class="modal ${wide?'wide':''}" role="dialog" aria-modal="true" aria-labelledby="modal-heading"><div class="modal-top"><div><p class="eyebrow">${esc(subtitle)}</p><h2 id="modal-heading">${esc(title)}</h2></div>${battle?'<div class="battle-menu"><button data-action="dex" aria-label="Open DataDex">▧ DataDex</button><button data-action="save-menu" aria-label="Open save and load">↓ Save & load</button></div>': '<button class="close-modal" data-action="close" aria-label="Close dialog">×</button>'}</div>${modalMusicMarkup()}${battle ? body : `<div class="modal-content">${body}</div>`}</section></div>`;
 }
 
 function renderModal({resetFocus=false} = {}) {
   if (!modal) return;
+  const openingRewards=modal==='battle-result'&&!!$('modal-root').querySelector('.battle-action-menu');
   const previousControl=document.activeElement?.closest('#modal-root button[data-action]');
   const previousAction=resetFocus?undefined:previousControl?.dataset.action;
   const previousId=previousControl?.dataset.id;
@@ -436,23 +498,25 @@ function renderModal({resetFocus=false} = {}) {
   battleLogObserver?.disconnect();
   battleLogObserver=null;
   $('modal-root').innerHTML=html;
+  syncMusic();
   speech.sync(activeDialogue ? currentSegment(activeDialogue) : null);
   updateSpeechControls();
   paintPortraits($('modal-root'));
   const root=$('modal-root');
   let focusable;
   if (activeDialogue) {
-    focusable=[...root.querySelectorAll('button:not(:disabled)')].find(button=>button.dataset.action===previousAction&&(!previousId||button.dataset.id===previousId));
+    focusable=[...root.querySelectorAll('button[data-action]:not(:disabled)')].find(button=>button.dataset.action===previousAction&&(!previousId||button.dataset.id===previousId));
     focusable ||= isDialogueComplete(activeDialogue) ? root.querySelector('.dialogue-followup button:not(:disabled), .modal-actions button:not(:disabled)') : root.querySelector('[data-action="dialogue-next"]');
     const segment=currentSegment(activeDialogue);
     const announcement=resolveSpeaker(segment.speaker,state.player.name).name+': '+segment.text;
     if ($('dialogue-announcer').textContent!==announcement) $('dialogue-announcer').textContent=announcement;
   } else {
-    if (!resetFocus) focusable=logFocused?root.querySelector('.battle-log'):[...root.querySelectorAll('button:not(:disabled)')].find(button=>button.dataset.action===previousAction&&(!previousId||button.dataset.id===previousId)&&(!previousIndex||button.dataset.index===previousIndex));
+    if (!resetFocus) focusable=logFocused?root.querySelector('.battle-log'):[...root.querySelectorAll('button[data-action]:not(:disabled)')].find(button=>button.dataset.action===previousAction&&(!previousId||button.dataset.id===previousId)&&(!previousIndex||button.dataset.index===previousIndex));
     if (modal==='battle'&&previousAction==='battle-confirm') focusable ||= root.querySelector('[data-battle-group]:not([hidden]) .battle-action-card:not(:disabled)');
     focusable ||= root.querySelector('input, button:not(:disabled), [tabindex="0"]');
     $('dialogue-announcer').textContent='';
   }
+  if (openingRewards) focusable=root.querySelector('.battle-progression')||focusable;
   focusable?.focus({preventScroll:true});
   const log=root.querySelector('.battle-log');
   if (log) {
@@ -490,6 +554,44 @@ function investigationModal() {
   observations().forEach(o=>{const h=habitats().find(h=>h.id===o.habitatId); const data=o.sightings||o.observations||h?.observations?.[o.time]||h?.[o.time]||[]; totals[o.time]+=(Array.isArray(data)?data.reduce((n,s)=>n+s.count,0):0);});
   const max=Math.max(totals.day,totals.night,1);
   return modalShell('The Nocturnal Mystery',`C1-03 · ${complete?'INVESTIGATION COMPLETE':`${count} / 6 FIELD OBSERVATIONS`}`,`<p>The ranger claims nearly every forest Databeast is nocturnal. His original sample came only from the canopy at night. Test whether those records represent the entire forest.</p><div class="sampling-grid"><div class="sample-heading">HABITAT</div><div class="sample-heading">☀ DAYLIGHT</div><div class="sample-heading">☾ MOONLIGHT</div>${habitats().map(h=>`<div class="sample-title">${esc(h.title)}</div>${['day','night'].map(t=>`<div class="${hasObserved(h.id,t)?'recorded':''}">${hasObserved(h.id,t)?'✓ Recorded':state.flags.compass?'✥ Unobserved':'○ Not observed'}</div>`).join('')}`).join('')}</div><h3>What your sample shows</h3><div class="chart-legend"><span><i></i>Day sightings</span><span><i class="night"></i>Night sightings</span></div><div class="research-chart">${['day','night'].map(t=>`<div class="chart-row ${t}"><span>${t==='day'?'Daylight':'Moonlight'}</span><div class="bar"><i style="width:${totals[t]/max*100}%"></i></div><span>${totals[t]}</span></div>`).join('')}</div><div class="evidence-note">These are recorded sightings, not a census of unique creatures or an estimate of an individual creature’s probability of activity. Compare habitat and time coverage before drawing a conclusion.</div>${complete?'<p><strong>Conclusion:</strong> The initial sample was biased. Activity varies across habitats and times; the ranger’s records cannot justify a claim about the entire forest.</p><div class="modal-actions"><button class="primary-button" data-action="mastery">Optional mastery challenge</button><button class="secondary-button" data-action="dex">View learning entry</button></div>':`<h3>What can we conclude?</h3><div class="findings"><button class="finding-button" data-action="finding" data-answer="nocturnal" ${count<6?'disabled':''}>Nearly every forest Databeast must be nocturnal.</button><button class="finding-button" data-action="finding" data-answer="biased" ${count<6?'disabled':''}>The ranger’s sample leaves out habitats and times. We need broader evidence.</button><button class="finding-button" data-action="finding" data-answer="certain" ${count<6?'disabled':''}>Our new sample proves exactly how every creature will behave.</button></div>${count<6?'<p class="save-info">Visit all three habitats in both daylight and moonlight before submitting your finding.</p>':''}<div class="modal-actions"><button class="secondary-button" data-action="hint">${q.hints>=3?'Review guided explanation':'A nudge from Inferra'}</button><button class="secondary-button" data-action="close">Back to the field</button></div>`}`,{wide:true});
+}
+
+function expProgressMarkup(member,compact=false) {
+  const progress=getExpProgress(member);
+  const name=creatureName(member.speciesId);
+  if (progress.isMaxLevel) return `<div class="exp-summary ${compact?'compact':''}" data-max-level="true"><span class="exp-progress-text">Maximum level · Lv. ${progress.level}</span>${compact?'':`<span class="exp-next-level">${progress.xp} EXP stored · no next level</span>`}</div>`;
+  const nextLevel=progress.level+1;
+  return `<div class="exp-summary ${compact?'compact':''}">
+    <div class="exp-progress" role="progressbar" aria-label="${esc(name)} EXP toward level ${nextLevel}" aria-valuemin="0" aria-valuemax="${progress.required}" aria-valuenow="${Math.min(progress.xp,progress.required)}" aria-valuetext="${progress.xp} of ${progress.required} EXP; ${progress.remaining} EXP to level ${nextLevel}"><i style="width:${progress.percent}%"></i></div>
+    <div class="exp-progress-text"><span>${progress.xp} / ${progress.required} EXP</span><span class="exp-next-level">${progress.remaining} EXP to Lv. ${nextLevel}</span></div>
+    ${!compact&&progress.xp>=progress.required?'<span class="exp-ready-note">Stored EXP will be applied after your next victory.</span>':''}
+  </div>`;
+}
+
+function levelUpMarkup(levelUp,recipient) {
+  const before=levelUp.before, after=levelUp.after;
+  const stats=[['Max HP',before.maxHp,after.maxHp],['Attack strength',before.attack,after.attack]].filter(([,from,to])=>from!==to);
+  const unlocked=(levelUp.unlockedSkills||[]).map(skill=>{
+    const id=typeof skill==='string'?skill:skill.id;
+    const move=SPECIES[recipient.speciesId].moves.find(move=>move.id===id);
+    return move?.name||(typeof skill==='string'?skill:skill.name||id);
+  });
+  return `<section class="level-up-notice" data-level="${levelUp.level}" aria-label="${esc(recipient.name)} reached level ${levelUp.level}">
+    <div class="level-up-heading"><span aria-hidden="true">✦</span><div><p>Level up!</p><h4>${esc(recipient.name)} reached Lv. ${levelUp.level}</h4></div></div>
+    <dl class="level-up-stats">${stats.map(([label,from,to])=>`<div class="level-up-stat"><dt>${label}</dt><dd>${from} <span aria-hidden="true">→</span><span class="sr-only"> to </span> ${to} <strong>(+${to-from})</strong></dd></div>`).join('')}</dl>
+    ${unlocked.length?`<div class="level-up-skills"><h5>New skills</h5><p>${unlocked.map(esc).join(' · ')}</p></div>`:''}
+  </section>`;
+}
+
+function battleProgressionMarkup(progression) {
+  const {recipient,before,after,levelUps=[],xpGained,outcome}=progression;
+  const won=outcome==='victory'||outcome==='bond';
+  const title=outcome==='bond'?'A bond worth growing':won?(levelUps.length?'Your partner grows stronger':'Experience earned'):'Experience this encounter';
+  return `<section class="battle-progression" data-outcome="${esc(outcome)}" tabindex="-1" aria-labelledby="battle-progression-title">
+    <div class="battle-reward-heading"><div><p class="battle-reward-eyebrow">Encounter rewards</p><h3 id="battle-progression-title">${title}</h3></div><strong class="battle-exp-earned" data-exp="${xpGained}">${xpGained?'+':''}${xpGained} EXP</strong></div>
+    ${recipient?`<div class="battle-exp-recipient"><div class="battle-reward-portrait">${portrait(recipient.speciesId,90)}</div><div class="battle-exp-copy"><p class="battle-progression-name">${esc(recipient.name)}</p><p class="battle-progression-level">${before.level!==after.level?`Lv. ${before.level} → Lv. ${after.level}`:`Lv. ${after.level}`}</p>${expProgressMarkup(after)}</div></div><p class="battle-exp-context">Awarded to your active Databeast.</p>`:`<p class="battle-no-exp">${outcome==='escape'?'Leaving an encounter awards no EXP.':'A defeat awards no EXP. Your team is rested for another try.'}</p>`}
+    ${levelUps.length?`<div class="battle-level-ups" role="status" aria-live="polite">${levelUps.map(level=>levelUpMarkup(level,recipient)).join('')}</div>`:''}
+  </section>`;
 }
 
 function battleParticipant(participant) {
@@ -541,7 +643,7 @@ function battleTimeline(entries,complete=false) {
 function battleCombatant(member,side) {
   const enemy=side==='enemy';
   return `<section class="battle-combatant" data-side="${side}" aria-label="${enemy?'Enemy':'Your'} ${esc(creatureName(member.speciesId))}">
-    <div class="battle-stat"><p class="battle-side-label">${enemy?'Enemy':'Your Databeast'}</p><h3>${esc(creatureName(member.speciesId))}<small>Lv. ${member.level}</small></h3><div class="hp-bar"><i style="width:${Math.max(0,member.hp/member.maxHp*100)}%"></i></div><p><span>${member.hp} / ${member.maxHp} HP</span><span>Focus ${member.focus}</span></p></div>
+    <div class="battle-stat"><p class="battle-side-label">${enemy?'Enemy':'Your Databeast'}</p><h3>${esc(creatureName(member.speciesId))}<small>Lv. ${member.level}</small></h3><div class="hp-bar"><i style="width:${Math.max(0,member.hp/member.maxHp*100)}%"></i></div><p><span>${member.hp} / ${member.maxHp} HP</span><span>Focus ${member.focus}</span></p>${enemy?'':expProgressMarkup(member,true)}</div>
     <div class="battle-creature"><div class="ground"></div>${portrait(member.speciesId,enemy?150:180,enemy?'enemy':'player-art')}</div>
   </section>`;
 }
@@ -720,6 +822,27 @@ $('modal-root').addEventListener('click',event=>{
   else if (a==='reset-confirm') {state=createGame();path=[];persist();updateUI();openModal('welcome');}
 });
 
+document.addEventListener('click',event=>{
+  const control=event.target.closest('[data-music-action]');
+  if (!control||control.disabled) return;
+  if (control.dataset.musicAction==='toggle') {
+    music.setEnabled(!music.getState().enabled);
+    if (music.getState().enabled) void music.unlock();
+  } else if (control.dataset.musicAction==='retry') void music.unlock();
+});
+document.addEventListener('input',event=>{
+  if (!event.target.matches('[data-music-action="volume"]')) return;
+  music.setVolume(Number(event.target.value)/100);
+  if (music.getState().enabled&&music.getState().volume>0) void music.unlock();
+});
+function unlockMusicFromGesture(event) {
+  if (!event.isTrusted||event.repeat||event.ctrlKey||event.metaKey||event.altKey||event.target?.closest?.('[data-music-control]')) return;
+  if (!music.getState().enabled||music.getState().volume===0) return;
+  void music.unlock();
+}
+window.addEventListener('pointerdown',unlockMusicFromGesture,{capture:true,passive:true});
+window.addEventListener('keydown',unlockMusicFromGesture,{capture:true});
+
 $('import-file').addEventListener('change',async event=>{
   const file=event.target.files?.[0]; event.target.value='';if(!file)return;
   try {if(file.size>1024*1024)throw new Error('This file is too large to be a prototype save.');const imported=checkedWorldState(parseGame(await file.text()));state=imported;path=[];persist();updateUI();openModal(state.battle?'battle':'save');toast('Your journey was imported successfully.');}
@@ -746,7 +869,7 @@ document.addEventListener('keydown',event=>{
         heldBattleKeys.add(event.key);
       }
     }
-    if (activeDialogue && !event.ctrlKey && !event.metaKey && !event.altKey && !/INPUT|TEXTAREA|SELECT/.test(event.target.tagName)) {
+    if (activeDialogue && !event.ctrlKey && !event.metaKey && !event.altKey && !/INPUT|TEXTAREA|SELECT/.test(event.target.tagName) && !event.target.closest('[data-music-control]')) {
       const key=event.key.toLowerCase();
       if (['enter',' ','e'].includes(key)) {
         if (event.repeat || heldDialogueKeys.has(key)) {event.preventDefault();return;}
@@ -795,10 +918,11 @@ $('time-button').addEventListener('click',()=>{
   else toast('Rest at the forest campfire to change between day and night.');
 });
 document.querySelectorAll('[data-walk]').forEach(button=>button.addEventListener('click',()=>{path=[];pathTarget=null;step(button.dataset.walk);}));
-$('sound-button').addEventListener('click',()=>{sound=!sound;$('sound-button').textContent=sound?'♪ Sound on':'♪ Sound off';$('sound-button').setAttribute('aria-pressed',String(sound));chime('success');});
+$('sound-button').addEventListener('click',()=>{sound=!sound;$('sound-button').textContent=sound?'Effects on':'Effects off';$('sound-button').setAttribute('aria-pressed',String(sound));chime('success');});
 $('speech-toggle-button').addEventListener('click',()=>speech.setEnabled(!speech.getState().enabled));
-document.addEventListener('visibilitychange',()=>{if(document.hidden) speech.skip();});
-window.addEventListener('pagehide',()=>speech.skip());
+document.addEventListener('visibilitychange',()=>{if(document.hidden) speech.skip();music.setHidden(document.hidden);});
+window.addEventListener('pagehide',()=>{speech.skip();music.setHidden(true);});
+window.addEventListener('pageshow',()=>music.setHidden(document.hidden));
 
 function frame(now){
   if(!document.hidden&&now-lastDraw>(reducedMotion?250:70)){
@@ -815,4 +939,6 @@ else if(!state.starter&&!resumed)openModal('welcome');
 else if(resumed)toast('Welcome back, '+state.player.name+'. Your journey has been restored.');
 if(unreadableSave)toast('The browser save could not be read. You can import a backup in Save & load.');
 if(!savingAvailable)$('save-status').textContent='Automatic saving unavailable · Export a save in Save & load';
+music.setHidden(document.hidden);
+syncMusic();
 requestAnimationFrame(frame);

@@ -4,6 +4,7 @@ import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { resolve } from 'node:path';
+import { readFile } from 'node:fs/promises';
 
 const script = resolve(import.meta.dirname, '../scripts/serve.mjs');
 function launch(port) {
@@ -34,6 +35,12 @@ test('starting twice reuses the game server without an EADDRINUSE crash', {timeo
     const response = await fetch(`http://127.0.0.1:${port}/`);
     assert.equal(response.status, 200);
     assert.match(await response.text(), /The Chronicles of Data/);
+    for (const scene of ['village', 'forest', 'night', 'battle', 'mystery', 'celebration', 'rest']) {
+      const music = await fetch(`http://127.0.0.1:${port}/music/${scene}.mp3`);
+      assert.equal(music.status, 200, `the uploaded ${scene} music is served with the game`);
+      assert.equal(music.headers.get('content-type'), 'audio/mpeg', `${scene} has the correct MP3 content type`);
+      assert.deepEqual(Buffer.from(await music.arrayBuffer()), await readFile(resolve(import.meta.dirname, `../dist/music/${scene}.mp3`)), `the original ${scene} MP3 is served without modification or truncation`);
+    }
     second = launch(port);
     await second.waitFor(/The game is already running\. Open http:\/\/127\.0\.0\.1:/);
     assert.equal((await second.exit)[0], 0);

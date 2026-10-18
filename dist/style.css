@@ -159,4 +159,104 @@
   .battle-action-card-top{flex-wrap:nowrap}
   .battle-action-preview{padding:15px}
 }
+/* EXP uses its own label and blue bar alongside the green HP bars. */
+.party-card-copy{min-width:0;flex:1}
+.party-card .exp-summary{margin-top:9px}
+.exp-progress{height:6px;overflow:hidden;border-radius:3px;background:#142720;border:1px solid #476257}
+.exp-progress>i{display:block;height:100%;background:#a2cfda;transition:width .35s ease}
+.exp-progress-text{display:flex;justify-content:space-between;gap:4px 12px;flex-wrap:wrap;font-size:11px;line-height:1.5;color:#d7e4da;margin-top:6px;font-variant-numeric:tabular-nums}
+.exp-next-level{color:#a9c3b4;font-size:11px;line-height:1.5}
+.exp-summary[data-max-level=true] .exp-progress-text{color:#ddca91}
+.exp-ready-note{display:block;font-size:11px;line-height:1.5;color:#dac990;margin-top:5px}
+.exp-summary.compact .exp-progress{height:4px}
+.exp-summary.compact .exp-progress-text{font-size:9px;gap:2px 8px;margin-top:4px}
+.exp-summary.compact .exp-next-level{font-size:9px}
+.battle-combatant{justify-content:space-between}
+.battle-stat .exp-summary{margin-top:8px;border-top:1px solid #a9b695;padding-top:7px}
+.battle-stat .exp-progress{background:#bcc6ad;border-color:#91a187}
+.battle-stat .exp-progress>i{background:#667d92}
+.battle-stat .exp-progress-text,.battle-stat .exp-next-level{color:#465a49}
+.battle-progression{border:1px solid #788254;border-top:3px solid #dfc57d;border-radius:7px;padding:21px;background:linear-gradient(125deg,#30432c,#20362a);margin-bottom:22px;overflow-wrap:anywhere}
+.battle-progression:focus-visible{outline:2px solid var(--gold);outline-offset:4px}
+.battle-reward-heading{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:20px}
+.battle-progression .battle-reward-eyebrow{font-size:10px;line-height:1.5;letter-spacing:1.5px;text-transform:uppercase;color:#e3ce91;margin:0 0 5px}
+.battle-progression h3{font:25px/1.25 Georgia,serif;color:#f1e9cd;margin:0}
+.battle-exp-earned{flex:none;padding:9px 13px;border:1px solid #d3b977;border-radius:5px;background:#d6bb7d;color:#263723;font-size:23px;line-height:1.25;font-variant-numeric:tabular-nums;white-space:nowrap}
+.battle-progression[data-outcome=defeat] .battle-exp-earned,.battle-progression[data-outcome=escape] .battle-exp-earned{background:#30452d;border-color:#6a7e55;color:#cfdbbf;font-size:20px}
+.battle-exp-recipient{display:flex;align-items:center;gap:17px}
+.battle-reward-portrait{display:grid;place-items:center;flex:none;width:86px;height:86px;border:1px solid #526c48;border-radius:6px;background:#1c3025}
+.battle-reward-portrait canvas{width:80px;height:80px;image-rendering:pixelated}
+.battle-exp-copy{flex:1;min-width:0}
+.battle-progression .battle-progression-name{font:22px/1.3 Georgia,serif;color:#eee6ce;margin:0 0 3px}
+.battle-progression .battle-progression-level{font-size:12px;line-height:1.5;color:#d1c48d;margin:0 0 12px}
+.battle-progression .battle-exp-context{font-size:11px;line-height:1.6;color:#b9c9ad;margin:13px 0 0}
+.battle-progression .battle-no-exp{font-size:13px;line-height:1.7;color:#cfdbc2;margin:0}
+.battle-level-ups{display:grid;gap:12px;margin-top:19px}
+.level-up-notice{padding:16px;border:1px solid #bcab6d;border-radius:5px;background:#3b4c2b}
+.level-up-heading{display:flex;align-items:center;gap:13px;margin-bottom:13px}
+.level-up-heading>span{font-size:30px;color:#efd590;line-height:1}
+.battle-progression .level-up-heading p{font-size:10px;letter-spacing:1.5px;line-height:1.5;text-transform:uppercase;color:#efdc98;margin:0 0 3px}
+.level-up-heading h4{font:21px/1.3 Georgia,serif;color:#f5edce;margin:0}
+.level-up-stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin:0}
+.level-up-stat{padding:10px 12px;border:1px solid #6e7c4b;border-radius:4px;background:#293d27}
+.level-up-stat dt{font-size:10px;line-height:1.5;color:#c1cca6;margin-bottom:4px}
+.level-up-stat dd{font-size:14px;line-height:1.5;font-variant-numeric:tabular-nums;color:#e1e8cd;margin:0}
+.level-up-stat dd>span[aria-hidden]{color:#9dae86;margin:0 4px}
+.level-up-stat strong{color:#c2dfa1;white-space:nowrap}
+.level-up-skills{border-top:1px solid #6e7c4b;padding-top:13px;margin-top:13px}
+.level-up-skills h5{font-size:11px;color:#e5d493;margin:0 0 5px}
+.battle-progression .level-up-skills p{font-size:13px;line-height:1.5;color:#e1e9cf;margin:0}
+@media(max-width:560px){
+  .battle-progression{padding:15px;margin-bottom:18px}
+  .battle-reward-heading{gap:10px;flex-wrap:wrap;margin-bottom:16px}
+  .battle-progression h3{font-size:22px}
+  .battle-exp-earned{font-size:21px;padding:8px 11px}
+  .battle-exp-recipient{gap:12px}
+  .battle-reward-portrait{width:62px;height:62px}
+  .battle-reward-portrait canvas{width:58px;height:58px}
+  .battle-progression .battle-progression-name{font-size:20px}
+  .battle-progression .battle-progression-level{margin-bottom:8px}
+  .level-up-notice{padding:13px}
+  .level-up-heading{gap:10px}
+  .level-up-heading h4{font-size:20px}
+  .level-up-stats{grid-template-columns:minmax(0,1fr)}
+  .party-card-copy{width:100%}
+  .party-card .exp-progress-text{justify-content:center;gap:2px}
+  .party-card .exp-next-level{font-size:8px}
+}
+/* Music remains adjustable inside dialogs, alongside the scene's own controls. */
+.page-footer .audio-options{display:flex;flex-direction:column;align-items:stretch;gap:10px;min-width:0;max-width:360px;flex:1}
+.audio-toggles{display:flex;justify-content:flex-end;gap:16px}
+.music-controls{display:grid;grid-template-columns:auto minmax(60px,1fr) 34px;gap:7px 10px;align-items:center;padding:11px 12px;border:1px solid #43573d;border-radius:5px;background:#1b2d22}
+.music-controls>button[data-music-action=toggle]{grid-column:1;grid-row:1/3}
+.music-controls>label{grid-column:2/-1;color:#bac9ac;font-size:10px}
+.music-controls>input{grid-column:2;grid-row:2}
+.music-controls>output{grid-column:3;grid-row:2}
+.music-controls>.music-status,.music-controls>[data-music-action=retry]{grid-column:1/-1}
+[data-music-action=toggle],[data-music-action=retry]{border:1px solid #839263;border-radius:4px;padding:8px 10px;font-size:11px;line-height:1.4;white-space:nowrap;color:#e1d5ab}
+[data-music-action=toggle][aria-pressed=true]{border-color:#c3b27b;background:#33462d;color:#efdfa6}
+[data-music-action=volume]{min-width:0;width:100%;accent-color:#d6ba7a;cursor:pointer;height:25px;margin:0}
+[data-music-action=volume]:disabled{opacity:.5;cursor:default}
+[data-music-volume-value]{font-size:11px;line-height:1.4;color:#d1dfc2;font-variant-numeric:tabular-nums;min-width:32px;text-align:right}
+.music-status{font-size:10px;line-height:1.5;color:#a6b99c;min-width:0;overflow-wrap:anywhere}
+.modal-music-bar{display:flex;align-items:center;gap:7px 11px;padding:9px 24px;border-bottom:1px solid #405239;background:#16281e;flex-wrap:wrap}
+.modal-music-bar>[data-music-action=toggle]{font-size:10px;padding:6px 9px;flex:none}
+.modal-music-bar>label{font-size:10px;color:#b8c8ac;white-space:nowrap}
+.modal-music-bar>input{flex:0 1 105px;width:105px;height:24px}
+.modal-music-bar>.music-status{margin-left:auto;max-width:245px}
+.modal-music-bar>[data-music-action=retry]{font-size:10px;padding:5px 8px}
+@media(max-width:760px){
+  .page-footer{flex-wrap:wrap}
+  .page-footer .audio-options{max-width:none;flex-basis:100%;margin-top:5px}
+  .audio-toggles{justify-content:flex-start}
+  .music-controls{grid-template-columns:auto minmax(80px,1fr) 34px}
+  .modal-music-bar{padding:9px 18px}
+  .modal-music-bar>.music-status{flex-basis:100%;max-width:none;margin-left:0}
+}
+@media(max-width:390px){
+  .modal-music-bar{gap:5px 8px;padding:8px 12px}
+  .modal-music-bar>input{flex:1 1 50px;width:50px}
+  .modal-music-bar>label{font-size:9px}
+  .music-controls{padding:10px;gap:5px 8px}
+}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{transition:none!important;animation:none!important;scroll-behavior:auto!important}}
