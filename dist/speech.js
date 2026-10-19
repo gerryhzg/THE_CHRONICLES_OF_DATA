@@ -15,6 +15,13 @@ export const SPEECH_VOICE_PROFILES = Object.freeze({
   ranger: profile(1, .91, ['Ryan', 'Tom', 'James', 'Albert', 'David', 'Daniel']),
   observer: profile(1.02, 1.06, ['Ava', 'Moira', 'Hazel', 'Evan']),
   narrator: profile(.98, .93, ['Hazel', 'Arthur', 'David', 'Alex']),
+  mara: profile(.97, .96, ['Susan', 'Zira', 'Karen']),
+  orin: profile(.91, .88, ['George', 'Mark', 'Daniel']),
+  nell: profile(1.05, 1.08, ['Aria', 'Samantha', 'Sonia']),
+  bram: profile(.9, .83, ['Fred', 'David', 'Gordon']),
+  elin: profile(.93, 1.09, ['Jenny', 'Victoria', 'Ava']),
+  tomas: profile(.98, .9, ['Ryan', 'James', 'Guy']),
+  child: profile(1.08, 1.24, ['Moira', 'Hazel', 'Zira']),
 });
 
 function readGlobal(name) {

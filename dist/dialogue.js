@@ -6,9 +6,179 @@ export function getConversation(id, context = {}) {
   const player = name(context.playerName, 'Observer');
   const starter = name(context.starterName, 'your companion');
   const events = Array.isArray(context.events) ? context.events.filter(event => typeof event === 'string') : [];
+  const act1 = context.act1 || {};
+  const recordIds = Array.isArray(act1.records) ? act1.records : [];
+  const detailId = context.speciesId || context.data?.id || context.id;
   const conversation = (title, subtitle, segments, endLabel = 'Continue exploring') => ({ id, title, subtitle, segments, endLabel });
 
   switch (id) {
+    case 'act1-intro':
+      return conversation('The Broken Forecast', 'HARVEST VILLAGE · DAY 127', [
+        line('narrator', 'neutral', 'Morning light warms Harvest Village. Farmers carry baskets into the fields. Above the square, the Oracle announces: expected rainfall 0 mm. Forecast confidence: absolute.'),
+        line('narrator', 'concerned', 'The wind changes. Rain strikes the board, then pours across the fields. Baskets overturn. Water rises around the crops.'),
+        line('narrator', 'concerned', 'The rain gauge records 46 mm. The Oracle flickers: “Predictions remain perfect.”'),
+        line('rowan', 'concerned', 'The Oracle said the fields would be dry. We believed it.'),
+        line('lyra', 'thoughtful', 'Then we need to understand why it was wrong.'),
+        line('rowan', 'concerned', 'But the Oracle has never been wrong.'),
+        line('lyra', 'concerned', "That's exactly what worries me."),
+        line('narrator', 'concerned', 'The terminal crackles again. “Forecast accuracy remains perfect.” Behind it, villagers lift their ruined market stalls.'),
+        line('lyra', 'thoughtful', `Come to my laboratory, ${player}. I need someone who will look for answers.`),
+      ], 'Begin the investigation');
+    case 'act1-lyra':
+      if (act1.dexReceived) return conversation('A partner for the investigation', 'RESEARCH LAB', [
+        line('lyra', 'happy', `Your DataDex is ready, ${player}. Now you need a friend for the road.`),
+        line('lyra', 'thoughtful', 'Watch all three companions at their stations. Each notices something different. Any of them can help us investigate.'),
+      ], 'Meet the three companions');
+      if (act1.started) {
+        const missing = [['farm', 'Mara at the Farm Fields'], ['river', 'Bram at the river'], ['shop', 'Nell at the shop']]
+          .filter(([recordId]) => !recordIds.includes(recordId)).map(([, location]) => location);
+        return conversation('Follow the missing records', 'RESEARCH LAB', [
+          line('lyra', 'thoughtful', `You have ${recordIds.length} of the three original weather records. Keep each sheet somewhere dry. My pockets have proved unreliable.`),
+          line('lyra', 'thoughtful', missing.length
+            ? `Still to visit: ${missing.join('; ')}. You can follow those leads in any order.`
+            : 'All three sheets are safe. Bring them to Orin at the Weather Tower and compare each original with its Archive copy.'),
+          line('lyra', 'concerned', 'A mismatch would tell us the copies need investigation. It would not tell us who changed them, or whether anyone did it deliberately.'),
+        ], missing.length ? 'Continue searching' : 'Visit the Weather Tower');
+      }
+      return conversation('The Missing Rainfall Records', 'RESEARCH LAB', [
+        line('lyra', 'concerned', "You've seen what happened outside, haven't you?"),
+        line('observer', 'thoughtful', 'The Oracle predicted no rain. But the village was flooded.'),
+        line('lyra', 'concerned', 'Yes. And the strangest part is that it refuses to acknowledge the mistake.'),
+        line('observer', 'thoughtful', 'Could the machine be broken?'),
+        line('lyra', 'thoughtful', 'Perhaps. A machine can also produce a wrong answer when the information it receives is wrong.'),
+        line('lyra', 'thoughtful', 'Before the Oracle existed, our ancestors kept careful weather observations in the old Weather Tower. The storm scattered three original sheets.'),
+        line('lyra', 'thoughtful', "Mara saw one at the farm. Bram spotted paper by the river. Nell received a box from the tower. Find those records, and we'll compare them with the Archive."),
+      ], 'Look for the three records');
+    case 'act1-farm':
+      return conversation("Mara's flooded fields", 'FARM FIELDS', recordIds.includes('farm') ? [
+        line('mara', 'happy', "The Farmer's Ledger is safe with you. My family used it to decide when to plant, harvest, and prepare for storms."),
+        line('mara', 'thoughtful', 'The garden still needs clearing, if you have time. The other records come first; the mud can wait.'),
+      ] : [
+        line('mara', 'concerned', 'The Oracle told us to prepare for drought. Now the rain has washed away half our work.'),
+        line('observer', 'thoughtful', 'Professor Lyra asked me to find the old weather records.'),
+        line('mara', 'thoughtful', act1.fieldSteps?.farmCrateMoved
+          ? 'You shifted the damaged crate. There, beneath it: the ledger. Lift the paper carefully.'
+          : "A sheet blew beneath that damaged storage crate. Help me move it, then we'll see what survived."),
+      ], recordIds.includes('farm') ? 'Review the recovered ledger' : 'Inspect the damaged crate');
+    case 'act1-river':
+      return conversation('What the river remembers', 'RIVER AND OLD BRIDGE', recordIds.includes('river') ? [
+        line('bram', 'happy', 'You saved the River Observation Sheet. Those old notes helped us prepare when the low bridge flooded before.'),
+        line('bram', 'thoughtful', 'The river does not read forecasts. Best keep watching it ourselves.'),
+      ] : [
+        line('bram', 'concerned', "I've watched this river for thirty years. When it rises this quickly, the low bridge may flood."),
+        line('observer', 'thoughtful', 'How do you know?'),
+        line('bram', 'thoughtful', "Because I've seen it before, and wrote it down. Look along the bank: those ripples lead to paper caught in the reeds."),
+        line('bram', 'neutral', act1.fieldSteps?.riverLocated
+          ? 'You found the sheet. Reach from the safe bank and lift it out of the reeds.'
+          : 'Follow the ripples from this bank. Stay clear of the deep water while you inspect the reeds.'),
+      ], recordIds.includes('river') ? 'Review the river record' : 'Follow the ripples');
+    case 'act1-shop':
+      return conversation("Nell's unexpected delivery", 'GENERAL STORE', recordIds.includes('shop') ? [
+        line('nell', 'happy', 'One Village Weather Register, rescued from my storeroom. A tower emblem beats my filing system, apparently.'),
+        line('nell', 'thoughtful', 'Take a look at the supplies when you need them. No one should have to buy their way through an investigation.'),
+      ] : [
+        line('nell', 'thoughtful', 'A crate from the Weather Tower arrived after the storm. I thought it was another box of old papers.'),
+        line('observer', 'thoughtful', 'Those papers might help explain why our weather forecast was wrong.'),
+        line('nell', 'happy', "Then we'd better find the right one. Check the shipping receipt, the empty potion box, and that stamped document."),
+        line('nell', 'thoughtful', 'The tower used a clear copper emblem. Read each label; you can leave the packing straw to me.'),
+      ], recordIds.includes('shop') ? 'Browse supplies' : 'Inspect the storeroom');
+    case 'act1-tower':
+      return conversation('Originals beside the Archive', 'WEATHER TOWER', act1.dexReceived ? [
+        line('orin', 'thoughtful', 'The original sheets remain here beside their Archive copies. Rain on the paper, zero rainfall in each copy.'),
+        line('orin', 'concerned', 'We have preserved the discrepancy. Its cause still needs investigation.'),
+      ] : recordIds.length === 3 ? [
+        line('orin', 'happy', 'All three originals! Slide them onto the comparison table. We can check the copies without doing any sums.'),
+        line('orin', 'thoughtful', 'Read the rainfall on each original, then its Archive copy. Mark a record when the two entries disagree.'),
+        line('lyra', 'thoughtful', 'Keep the current storm separate: predicted 0 mm, measured 46 mm. These three sheets describe earlier years.'),
+      ] : [
+        line('orin', 'concerned', `The storm scattered three originals. You have recovered ${recordIds.length}. The empty places on this table belong to the missing sheets.`),
+        line('orin', 'thoughtful', 'Lyra has leads at the farm, river, and shop. Bring the originals here so we can compare the same records, side by side.'),
+      ], act1.dexReceived ? 'Review the comparison table' : 'Open the comparison table');
+    case 'act1-discovery':
+      return conversation('The evidence no longer agrees', 'WEATHER TOWER · DATA INTEGRITY WARNING', [
+        line('narrator', 'concerned', 'Original records: rainfall detected. Archive copies: no rainfall recorded. Source history: incomplete.'),
+        line('observer', 'thoughtful', 'These records show rain, but the Archive says there was none!'),
+        line('lyra', 'thoughtful', 'Exactly. The observations and the records no longer agree.'),
+        line('observer', 'concerned', 'Does that mean the Oracle is lying?'),
+        line('lyra', 'thoughtful', 'It means something is wrong with the evidence it uses. We have not established the cause, or whether anyone changed it deliberately.'),
+        line('lyra', 'thoughtful', 'Our ancestors learned by watching the world. They kept records so the next generation could make better decisions.'),
+        line('lyra', 'happy', 'This is a DataDex. It collects observations and preserves discoveries. Basic Observation, Scan, and your research journal are ready. We can begin gathering our own evidence.'),
+        line('lyra', 'happy', "Return to my lab when you're ready. You shouldn't go on this investigation alone."),
+      ], 'Activate the DataDex');
+    case 'act1-demo': {
+      const demos = {
+        creature_statifox: ['Statifox', 'The weather sensor clicks through its readings. Statifox tilts an ear, taps one flickering dial, and uncovers a loose connection.', 'Statifox notices inconsistencies that others overlook. That curious nose finds work even indoors.'],
+        creature_algobear: ['Algobear', 'A little calculation machine jams. Algobear studies the gears, shifts their order, and turns the crank. The machine hums again.', 'Algobear enjoys solving mechanical problems. It prefers a stubborn gear to an easy afternoon.'],
+        creature_terradeer: ['Terradeer', 'Terradeer lowers its glowing antlers toward a potted crop. A soft light reveals water collecting around its roots.', 'Terradeer understands the living world and notices environmental danger. We moved that pot above the flood line together.'],
+      };
+      const demo = demos[detailId] || demos.creature_statifox;
+      return conversation(`Meet ${demo[0]}`, 'RESEARCH LAB · COMPANION DEMONSTRATION', [
+        line('lyra', 'happy', `Let's give ${demo[0]} something to investigate. You can help by starting the demonstration.`),
+        line('narrator', 'neutral', demo[1]),
+        line('lyra', 'thoughtful', demo[2]),
+        line('lyra', 'happy', 'Every companion can travel with you and complete our investigations. A friendship leaves room to learn from each other.'),
+      ], `Record ${demo[0]}'s demonstration`);
+    }
+    case 'act1-bond':
+      return conversation('The First Bond', 'RESEARCH LAB', [
+        line('lyra', 'happy', "If you're going to investigate the Grand Archive, you shouldn't go alone."),
+        line('observer', 'thoughtful', 'Are those Databeasts?'),
+        line('lyra', 'thoughtful', 'They are. Each sees the world differently. Watch all three demonstrations before you choose your partner.'),
+        line('lyra', 'happy', 'Take your time, then confirm your choice. A strong partnership begins with trust. Take care of each other.'),
+      ], 'Meet and choose a companion');
+    case 'act1-council':
+      return conversation('A village that observes', 'TOWN SQUARE · VILLAGE COUNCIL', act1.councilComplete ? [
+        line('rowan', 'thoughtful', 'Our neighbors are keeping local observations again. We will preserve the originals and question the copies.'),
+        line('lyra', 'happy', 'The northern road is open. Professor Inferra in Twin Scholars’ Forest can help you investigate what records leave out.'),
+      ] : [
+        line('rowan', 'concerned', 'For generations, the Oracle has guided this village. We cannot abandon it over one storm.'),
+        line('mara', 'concerned', 'But we lost crops because we followed its prediction.'),
+        line('lyra', 'thoughtful', "The storm isn't the only problem. Our historical observations do not match the information stored in the Archive."),
+        line('rowan', 'thoughtful', 'How could that happen?'),
+        line('lyra', 'concerned', "I don't know yet. These mismatches do not prove deliberate tampering. Until we understand them, we shouldn't treat the Oracle as infallible."),
+        line('rowan', 'thoughtful', 'Then what do you propose?'),
+        line('lyra', 'thoughtful', 'We begin observing again. Every farmer, traveler, and researcher can help us collect evidence. Keep where, when, and how each observation was made.'),
+        line('rowan', 'happy', 'Then we will keep local records and help the flooded farms. Tomas, open the northern road for our Observer.'),
+        line('lyra', 'thoughtful', 'The mismatched records suggest that the Archive’s evidence has changed or been lost. The old scholars in the northern forest may help us understand how.'),
+        line('kai', 'happy', "Twin Scholars' Forest? I've always wanted to explore that place!"),
+        line('lyra', 'concerned', 'Be careful. Strange things have been happening beyond the village.'),
+        line('observer', 'thoughtful', "I'll find out what's happening."),
+      ], act1.councilComplete ? 'Follow the northern road' : 'Agree to the village plan');
+    case 'act1-gate':
+      return conversation('The northern road', 'VILLAGE GATE', act1.councilComplete ? [
+        line('tomas', 'happy', 'The northern road is open. Your first companion, DataDex, and battle practice should serve you well.'),
+        line('tomas', 'thoughtful', 'Find Professor Inferra at the forest field station. You can return to Harvest Village whenever you need a safe rest.'),
+      ] : [
+        line('tomas', 'concerned', 'The north road is closed while the village recovers from the storm.'),
+        line('tomas', 'thoughtful', !act1.dexReceived ? 'Help Lyra recover and compare the rainfall records first. She is working from the research lab.'
+          : context.hasStarter === false || !context.starterName ? 'Choose a companion at the lab, then practice with Kai in the square.'
+          : !context.rivalDefeated ? 'Kai is waiting in the square. Practice together before you travel.'
+          : 'Rowan and Lyra are gathering the council in the square. Speak to Rowan before you leave.'),
+      ], act1.councilComplete ? 'Enter Twin Scholars’ Forest' : 'Return to the village');
+    case 'act1-home':
+      return conversation('A light left on', 'YOUR HOME', [
+        line('narrator', 'neutral', 'Your boots leave a muddy pair of prints by the door. A dry blanket waits beside the bed.'),
+        line('observer', 'thoughtful', 'The village needs answers. I can take a breath before I go looking.'),
+        line('narrator', 'happy', 'Rest here to restore your companions. Save your journey when you are ready; your records will wait.'),
+      ], 'Rest and save');
+    case 'act1-sanctuary':
+      return conversation('Care before the next journey', 'RESEARCH SANCTUARY', [
+        line('elin', 'happy', `Welcome, ${player}. Adventuring is hard work for a pair of feet, or four.`),
+        line('elin', 'thoughtful', 'We restore your companions and help replenish field supplies. You can review your team here before setting out.'),
+        line('elin', 'happy', 'A borrowed training Cloudfin helps with Kai’s switching lesson. It returns to us afterward; your first partner stays with you.'),
+      ], 'Open sanctuary services');
+    case 'act1-side': {
+      const side = act1.side || {};
+      const sideConversations = {
+        child: [line('child', side.scarfReturned ? 'happy' : 'concerned', side.scarfReturned ? 'My scarf is back! Next time the Oracle says dry weather, I am bringing my boots anyway.' : side.scarfFound ? 'You found my scarf! May I have it back? I saved a few coins to say thank you.' : 'The Oracle said no rain! So why are my boots full of water? My scarf blew toward the old bridge, too.')],
+        scarf: [line('narrator', 'thoughtful', side.scarfFound ? 'The scarf is safe. Its owner is waiting near the village square.' : 'A red scarf flutters on a low branch beside the old bridge. A child in the square was looking for one.')],
+        observer: [line('orin', 'thoughtful', side.oldJournal ? 'That old Observer journal reminds us to keep the place and time beside every reading. Your Archive Fragment preserves its story.' : 'An old Observer left a journal on the tower’s lower shelf. “Write what you see. Write where you stood. Leave room to be mistaken.”')],
+        supply: [line('narrator', 'happy', side.supplyChest ? 'The hidden supply chest is empty. Its potion is already safely packed.' : 'A narrow way behind the shop crates leads to a forgotten supply chest. The bottle inside is still sealed.')],
+        garden: [line('mara', side.gardenCleared ? 'happy' : 'concerned', side.gardenCleared ? 'Water is flowing through the garden channel again. You noticed what the plants needed and did something about it.' : 'The flood left branches across the garden drain. Clear the debris and the roots will have a chance to dry.')],
+      };
+      const aliases = {scarf_find:'scarf', scarf_return:'child', old_journal:'observer', supply_chest:'supply', garden_clear:'garden'};
+      return conversation('Small things worth saving', 'OPTIONAL VILLAGE DISCOVERY', sideConversations[aliases[detailId] || detailId] || sideConversations.child, 'Help the village');
+    }
     case 'starters':
       return conversation('The first bond', 'RESEARCH LAB', [
         line('lyra', 'happy', `Come in, ${player}. Your first companion is waiting. Or possibly deciding whether you look interesting.`),
@@ -61,6 +231,7 @@ export function getConversation(id, context = {}) {
         line('kai', 'determined', 'Attack when you\'re ready. Need Focus back? Guard. You\'ll take less damage, too. I do give sensible advice occasionally.'),
         line('observer', 'thoughtful', 'Does scanning use my turn?'),
         line('kai', 'thoughtful', 'Nope. One free scan per battle, no turn spent. It shows moves already observed, not a promise about my next one. I enjoy being unpredictable.'),
+        line('kai', 'happy', 'For our first lesson, Lyra lends you a training Cloudfin. Try Attack, Guard, Scan, and Switch, then finish the match. Cloudfin goes home afterward.'),
         line('observer', 'happy', 'Right. Let\'s see what actually happens.'),
       ], 'Prepare for the battle');
     case 'kai-before-starter':
@@ -223,7 +394,11 @@ export function getConversation(id, context = {}) {
         line('kai', 'happy', `You win, ${player}. There goes the victory pose. I'd practiced the eyebrows and everything.`),
         line('observer', 'happy', 'You made us work for it.'),
         line('kai', 'thoughtful', 'I did, didn\'t I? Still... you watched my partner. I was busy imagining the applause. Next time I\'m watching, too.'),
-        line('kai', 'happy', 'The eastern road\'s open. Professor Inferra is waiting in the forest. Go on. I\'ll work on my rematch face.'),
+        line('kai', 'happy', context.act1 && !act1.migrated && !act1.councilComplete
+          ? 'Rowan and Lyra are gathering the village council in the square. Show them you and your partner are ready. I will work on my rematch face.'
+          : context.act1 && act1.councilComplete
+            ? 'The northern road is open. Professor Inferra is waiting in the forest. Go on. I will work on my rematch face.'
+            : 'The eastern road\'s open. Professor Inferra is waiting in the forest. Go on. I\'ll work on my rematch face.'),
       ], 'View the encounter result');
       return conversation('Every encounter teaches you something', 'ENCOUNTER COMPLETE', [
         line('narrator', 'neutral', 'Lyra guides your tired team to the sanctuary. Warm light restores everyone\'s health.'),

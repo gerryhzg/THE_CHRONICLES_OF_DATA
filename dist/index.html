@@ -8,12 +8,13 @@
   <title>The Chronicles of Data · The False Forecast</title>
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="act1.css">
   <script type="module" src="app.js"></script>
 </head>
 <body>
   <header class="site-header">
     <a class="wordmark" href="#" id="brand" aria-label="The Chronicles of Data, game help"><span class="brand-mark">◈</span><span>THE CHRONICLES <em>OF</em> DATA<small>An adventure in Aetheria</small></span></a>
-    <nav aria-label="Game tools"><span class="version-chip">PLAYABLE PROTOTYPE <i>01</i></span><button id="dex-button" class="header-button" aria-label="Open DataDex">▧ <span>DataDex</span></button><button id="save-button" class="header-button" aria-label="Open save and load">↓ <span>Save & load</span></button><button id="help-button" class="icon-button" aria-label="Help and controls">?</button></nav>
+    <nav aria-label="Game tools"><span class="version-chip">ACT I <i>01</i></span><button id="dex-button" class="header-button" aria-label="Open DataDex">▧ <span>DataDex</span></button><button id="save-button" class="header-button" aria-label="Open save and load">↓ <span>Save & load</span></button><button id="help-button" class="icon-button" aria-label="Help and controls">?</button></nav>
   </header>
   <main>
     <div class="chapter-heading"><div><p class="eyebrow">CHAPTER ONE <span>/</span> THE AWAKENING OF DATA</p><h1>The False Forecast<span class="title-period">.</span></h1><p class="chapter-subtitle">The Oracle promised a drought. The rain tells another story.</p></div><div class="chapter-stamp"><span>THE VALE<br>OF RECORDS</span><small>✧ AETHERIA ✧</small></div></div>
@@ -27,7 +28,7 @@
     </div>
     <div class="below-world"><section class="party-panel"><div class="section-title"><h2>Your companions</h2><span id="party-count">0 / 4</span></div><div class="party-grid" id="party-grid"></div></section><section class="supplies-panel"><h2>In your satchel</h2><div class="supplies" id="supplies"></div><div id="save-status" class="save-status" role="status"><span>●</span> Progress saves automatically</div></section></div>
     <div class="mobile-controls" aria-label="Touch controls"><button data-walk="up" aria-label="Move up">↑</button><div><button data-walk="left" aria-label="Move left">←</button><button data-walk="down" aria-label="Move down">↓</button><button data-walk="right" aria-label="Move right">→</button><button id="mobile-interact">Interact</button></div></div>
-    <footer class="page-footer"><span>OBSERVE. QUESTION. DISCOVER.</span><p>Original world & creatures · Stage 1 · Browser-local saves</p><div class="audio-options" role="group" aria-label="Audio options"><div class="audio-toggles"><button id="speech-toggle-button" aria-pressed="false">Voices off</button><button id="sound-button" aria-pressed="false">Effects off</button></div><div class="music-controls" data-music-control role="group" aria-label="Background music"><button id="music-toggle-button" data-music-action="toggle" aria-pressed="true">Music on</button><label for="music-volume">Music volume</label><input id="music-volume" data-music-action="volume" type="range" min="0" max="100" step="1" value="30"><output id="music-volume-value" for="music-volume" data-music-volume-value>30%</output><button data-music-action="retry" hidden>Retry music</button><span id="music-status" class="music-status" data-music-status></span></div></div></footer>
+    <footer class="page-footer"><span>OBSERVE. QUESTION. DISCOVER.</span><p>Act I: The Broken Forecast · Browser-local saves</p><div class="audio-options" role="group" aria-label="Audio options"><div class="audio-toggles"><button id="speech-toggle-button" aria-pressed="false">Voices off</button><button id="sound-button" aria-pressed="false">Effects off</button></div><div class="music-controls" data-music-control role="group" aria-label="Background music"><button id="music-toggle-button" data-music-action="toggle" aria-pressed="true">Music on</button><label for="music-volume">Music volume</label><input id="music-volume" data-music-action="volume" type="range" min="0" max="100" step="1" value="30"><output id="music-volume-value" data-music-volume-value>30%</output><button data-music-action="retry" hidden>Retry music</button><span id="music-status" class="music-status" data-music-status></span></div></div></footer>
   </main>
   <div id="modal-root"></div><div id="dialogue-announcer" class="sr-only" aria-live="polite" aria-atomic="true"></div><div id="toast" class="toast" role="status" hidden></div>
   <input id="import-file" type="file" accept="application/json,.json" hidden>

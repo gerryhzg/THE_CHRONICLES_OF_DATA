@@ -1,6 +1,7 @@
+import { createLegacyGame as createGame } from './fixtures.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { SPECIES, HABITATS, createGame, act, serializeGame, parseGame, saveGame, loadGame, SAVE_KEY } from '../dist/engine.js';
+import { SPECIES, HABITATS, act, serializeGame, parseGame, saveGame, loadGame, SAVE_KEY } from '../dist/engine.js';
 
 const starters = ['creature_statifox', 'creature_algobear', 'creature_terradeer'];
 const step = (state, action, rng) => act(state, action, rng).state;

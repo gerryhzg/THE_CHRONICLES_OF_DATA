@@ -250,3 +250,59 @@ test('all conversation branches contain readable segments and supported speaker 
   assert.ok(getConversation('starters').segments.length >= 3, 'Starter dialogue must support the full keyboard walkthrough');
   assert.ok(getConversation('inferra').segments.length >= 4, 'Inferra introduction must support the full keyboard walkthrough');
 });
+
+test('Act I preserves the opening exchange and keeps the discovery within the evidence', () => {
+  const opening = getConversation('act1-intro', {playerName:'Mira'});
+  const core = [
+    'The Oracle said the fields would be dry. We believed it.',
+    'Then we need to understand why it was wrong.',
+    'But the Oracle has never been wrong.',
+    "That's exactly what worries me.",
+  ];
+  assert.deepEqual(opening.segments.slice(3, 7).map(segment => segment.text), core);
+  assert.match(textOf(opening), /0 mm.*46 mm/);
+  assert.match(textOf(opening), /Predictions remain perfect/);
+  assert.match(textOf(opening), /Mira/);
+  for (const id of ['act1-discovery', 'act1-council']) {
+    const conversation = getConversation(id);
+    assert.match(textOf(conversation), /(?:not established|do not prove).*deliberate/i);
+    assertReadableConversation(conversation);
+  }
+  assert.match(textOf(getConversation('act1-discovery')), /DataDex.*Basic Observation, Scan/);
+  assert.doesNotMatch(textOf(getConversation('act1-discovery')), /Pattern Sight/);
+});
+
+test('Act I return dialogue responds to recovered evidence and council progress without mutation', () => {
+  const act1 = {started:true, records:['farm'], dexReceived:false, fieldSteps:{farmCrateMoved:true}, side:{}};
+  const original = structuredClone(act1);
+  const search = getConversation('act1-lyra', {act1});
+  assert.match(textOf(search), /1 of the three/);
+  assert.match(textOf(search), /Bram.*Nell/);
+  assert.doesNotMatch(textOf(search), /Still to visit: Mara/);
+  assert.match(textOf(getConversation('act1-farm', {act1})), /safe with you/);
+  assert.match(textOf(getConversation('act1-river', {act1})), /reeds/);
+  assert.deepEqual(act1, original);
+  const gathered = {...act1, records:['farm','river','shop']};
+  assert.match(textOf(getConversation('act1-lyra', {act1:gathered})), /All three sheets.*Weather Tower/);
+  assert.match(textOf(getConversation('act1-tower', {act1:gathered})), /each original.*Archive copy/);
+  const council = getConversation('act1-council', {act1:{councilComplete:true}});
+  assert.match(textOf(council), /northern road is open/);
+  assert.match(textOf(getConversation('battle-result', {act1:{migrated:false},kind:'rival',won:true})), /council.*square/);
+});
+
+test('every Act I scene and village portrait renders readable manual dialogue', () => {
+  const cases = ['act1-intro','act1-lyra','act1-farm','act1-river','act1-shop','act1-tower',
+    'act1-discovery','act1-bond','act1-council','act1-gate','act1-home','act1-sanctuary'];
+  for (const id of cases) assertReadableConversation(getConversation(id));
+  const demoText = new Set();
+  for (const id of ['creature_statifox','creature_algobear','creature_terradeer']) {
+    const conversation = getConversation('act1-demo', {data:{id}});
+    assertReadableConversation(conversation);
+    assert.match(textOf(conversation), /Every companion can.*complete/);
+    demoText.add(textOf(conversation));
+  }
+  assert.equal(demoText.size, 3, 'Each companion has its own concrete demonstration');
+  for (const id of ['scarf','child','observer','supply','garden','scarf_find','scarf_return','old_journal','supply_chest','garden_clear']) {
+    for (const done of [false,true]) assertReadableConversation(getConversation('act1-side', {id,act1:{side:{scarfFound:done,scarfReturned:done,oldJournal:done,supplyChest:done,gardenCleared:done}}}));
+  }
+});

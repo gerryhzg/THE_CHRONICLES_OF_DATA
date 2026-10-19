@@ -10,10 +10,17 @@ export const SPEAKERS = Object.freeze({
   lyra: speaker('lyra', 'Professor Lyra', 'Databeast researcher', '#9bbfbb'),
   kai: speaker('kai', 'Kai', 'Your fellow Observer', '#dfa974', [...commonExpressions, 'determined']),
   inferra: speaker('inferra', 'Professor Inferra', 'Field researcher', '#b3c99a'),
-  rowan: speaker('rowan', 'Farmer Rowan', 'Harvest Village farmer', '#d9c08a'),
+  rowan: speaker('rowan', 'Elder Rowan', 'Harvest Village elder', '#d9c08a'),
   ranger: speaker('ranger', 'Forest Ranger', 'Guardian of the forest', '#b4c08b'),
   observer: speaker('observer', 'Observer', 'Databeast adventurer', '#a5c3cf'),
   narrator: speaker('narrator', 'DataDex', 'Your field companion', '#d6ba7a'),
+  mara: speaker('mara', 'Farmer Mara', 'Keeper of the flooded fields', '#d9aa75'),
+  orin: speaker('orin', 'Tower Keeper Orin', 'Keeper of the weather records', '#9bb1c9'),
+  nell: speaker('nell', 'Shopkeeper Nell', 'Harvest Village shopkeeper', '#d5a1a5'),
+  bram: speaker('bram', 'Fisher Bram', 'Observer of the village river', '#91bbc4'),
+  elin: speaker('elin', 'Sanctuary Keeper Elin', 'Databeast caretaker', '#a9c6a3'),
+  tomas: speaker('tomas', 'Village Guard Tomas', 'Guardian of the northern road', '#b4a6cd'),
+  child: speaker('child', 'Village Child', 'A neighbor looking for a scarf', '#deb485'),
 });
 
 export function resolveSpeaker(id, playerName = 'Observer') {
@@ -234,7 +241,34 @@ function narrator(expression) {
     + rect('#a2c8af', 10, 20, 2, 2) + rect('#a2c8af', 52, 40, 2, 2);
 }
 
-const artists = { lyra, kai, inferra, rowan, ranger, observer, narrator };
+// Village portraits share the same hand-drawn pixel grid, with their own clothes,
+// hair, skin palettes, and tools so each neighbor remains recognizable.
+function villager(expression, {skin, shadow, light, hair, clothing, trim, hat, detail}) {
+  let markup = coat(clothing, trim, '#ded4aa', skin)
+    + face({skin, shadow, light, eyebrow:hair}, expression)
+    + polygon(hair, [[19, 27], [19, 19], [24, 12], [39, 12], [44, 19], [45, 30], [41, 29], [39, 21], [30, 23], [24, 21], [22, 30]])
+    + rect(hair, 20, 29, 2, 8) + rect(hair, 42, 29, 2, 6);
+  if (hat === 'straw') markup += polygon('#dec18b', [[12, 22], [21, 19], [24, 10], [39, 10], [43, 19], [52, 22], [52, 25], [12, 25]]) + rect('#a5794b', 23, 17, 19, 3);
+  if (hat === 'cap') markup += polygon(clothing, [[19, 21], [21, 14], [28, 10], [39, 13], [43, 21]]) + rect(trim, 18, 20, 29, 4);
+  if (hat === 'guard') markup += polygon('#8d9b9c', [[19, 24], [21, 14], [31, 9], [42, 15], [45, 24], [41, 25], [38, 20], [25, 20], [22, 25]]) + rect('#d8c9a1', 30, 11, 3, 10);
+  if (detail === 'apron') markup += polygon('#e2d2a5', [[25, 49], [38, 49], [42, 64], [21, 64]]) + rect('#9d7d60', 28, 56, 8, 4);
+  if (detail === 'journal') markup += rect('#4e657c', 41, 50, 11, 14) + rect('#eee0b9', 43, 52, 7, 10) + rect('#a2afba', 43, 54, 5, 1) + rect('#a2afba', 43, 57, 5, 1);
+  if (detail === 'fishing') markup += polygon('#9a774f', [[11, 30], [13, 29], [23, 64], [20, 64]]) + rect('#d3d5c0', 11, 31, 1, 28);
+  if (detail === 'crystal') markup += polygon('#bce2d6', [[43, 51], [48, 56], [43, 63], [38, 56]]) + rect('#eff1ca', 42, 53, 2, 6);
+  if (detail === 'badge') markup += polygon('#d9bf7d', [[43, 50], [47, 53], [46, 58], [42, 60], [39, 55]]) + rect('#f1dfaa', 42, 53, 2, 3);
+  if (detail === 'scarf') markup += polygon('#bf6456', [[23, 45], [32, 49], [41, 45], [40, 50], [33, 54], [25, 51]]) + rect('#e4a16f', 33, 52, 6, 12);
+  return markup;
+}
+
+const artists = { lyra, kai, inferra, rowan, ranger, observer, narrator,
+  mara: expression => villager(expression, {skin:'#b77e55', shadow:'#85563d', light:'#d49b6e', hair:'#443a2d', clothing:'#80784c', trim:'#a9a06c', hat:'straw', detail:'apron'}),
+  orin: expression => villager(expression, {skin:'#e0b48f', shadow:'#b0866b', light:'#f1cfaa', hair:'#a8a9a1', clothing:'#576c86', trim:'#8299b0', detail:'journal'}),
+  nell: expression => villager(expression, {skin:'#cf956d', shadow:'#a66b50', light:'#e7af84', hair:'#6d403b', clothing:'#97616d', trim:'#be8e94', detail:'apron'}),
+  bram: expression => villager(expression, {skin:'#e0ad81', shadow:'#ae7b55', light:'#f1c79c', hair:'#63564b', clothing:'#4e7a83', trim:'#83a8ab', hat:'cap', detail:'fishing'}),
+  elin: expression => villager(expression, {skin:'#9e704f', shadow:'#754b37', light:'#bc9069', hair:'#3e342e', clothing:'#648766', trim:'#94b48a', detail:'crystal'}),
+  tomas: expression => villager(expression, {skin:'#d4a782', shadow:'#a87a5c', light:'#eec7a0', hair:'#574236', clothing:'#6b6484', trim:'#9893af', hat:'guard', detail:'badge'}),
+  child: expression => villager(expression, {skin:'#e6b994', shadow:'#bc8a68', light:'#f4cfae', hair:'#a86c40', clothing:'#678e8c', trim:'#9dc0ae', detail:'scarf'}),
+};
 
 export function portraitMarkup(speakerId, expression = 'neutral', playerName = 'Observer') {
   const activeSpeaker = resolveSpeaker(speakerId, playerName);

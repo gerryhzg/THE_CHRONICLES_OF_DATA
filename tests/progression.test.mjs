@@ -1,6 +1,7 @@
+import { createLegacyGame as createGame } from './fixtures.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { SPECIES, act, createGame, parseGame, serializeGame } from '../dist/engine.js';
+import { SPECIES, act, parseGame, serializeGame } from '../dist/engine.js';
 import { MAX_LEVEL, getAttackStrength, getExpProgress, getExpRequired } from '../dist/progression.js';
 
 function battle(kind = 'rival', { level = 5, xp = 0, hp } = {}) {

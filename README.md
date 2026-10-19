@@ -1,6 +1,8 @@
-# The Chronicles of Data — Stage 1
+# The Chronicles of Data - Act I
 
-A browser-playable prototype based on **Chapter One: The Awakening of Data — The False Forecast**. It includes Harvest Village, one wilderness route in Twin Scholars’ Forest, three starter Databeasts, turn-based combat, Voltkit recruitment, and the complete **Nocturnal Mystery** sampling investigation. DataDex tracking and save/load are part of the core game.
+A browser-playable creature RPG with the complete **Act I: Harvest Village: The Broken Forecast**, implemented from `ACT1.docx` in the existing buildless game. Recover historical rainfall records, activate the DataDex, meet three starters, train with a borrowed Cloudfin, and help the council reopen the northern road. The existing **Nocturnal Mystery** in Twin Scholars' Forest remains playable afterward.
+
+The document's suggested Godot project is an architectural proposal; this implementation extends the repository's existing HTML, CSS, and JavaScript engine. No installation or build is needed. Its 30-40 minute pacing is a design target, not a measured playtest result.
 
 ## Collaboration basics
 
@@ -101,7 +103,8 @@ Deploy the new commit, then open the production URL without a trailing comma: **
 | Walk | WASD, arrow keys, or click an open map tile |
 | Talk, observe, or enter | E, Space, Interact, or click a place |
 | Choose a destination | Help → Places to visit |
-| Open DataDex | X or the DataDex button |
+| Open DataDex after activation | X or the DataDex button |
+| Quest journal | J, Q, or the journal button; use Q with IJKL movement |
 | Save and load | P or Save & load |
 | View objectives, directions, and hints | Quest journal in the field journal |
 | Close a dialog | Escape or its close button |
@@ -136,21 +139,25 @@ Music starts at **30%** after your first click, tap, or key press, subject to br
 
 Scene changes crossfade over one second. Opening save or DataDex during battle keeps the battle theme. Dialogue lowers the music, and spoken narration lowers it further; finishing or skipping narration returns to the quieter dialogue level until the conversation closes. Hiding or leaving the page pauses playback; returning resumes an already-started soundtrack when the browser permits it.
 
-## Complete Stage 1 walkthrough
+## Complete Act I walkthrough
 
-1. Begin your journey and choose **Statifox**, **Algobear**, or **Terradeer**. If you choose to explore first, visit Lyra’s Lab to choose your companion. Every starter can complete the prototype.
-2. Visit **Kai** in the village square and accept his friendly battle. Use the free **Scan**, then attack. Guard restores Focus and reduces damage; potions heal. Winning unlocks the eastern forest gate and heals your party. A defeat also heals your team so you can retry.
-3. Visit the **Weather Tower** to read the evidence contradicting the Oracle’s forecast. Follow the eastern gate into **Twin Scholars’ Forest**.
-4. Speak to **Professor Inferra** and begin **The Nocturnal Mystery**. The ranger recorded only the canopy at night and claims nearly every forest Databeast is nocturnal.
-5. Visit **Sunlit Meadow**, **Riverbank**, and **High Canopy**, and press **Record in DataDex** at each. Visit **Observer Camp** and rest to switch between day and night, then record the same three habitats at the other time. You need all six habitat/time categories; existing observations remain recorded.
-6. Open the investigation or return to Inferra. Compare the field notes and choose the conclusion that the ranger’s sample leaves out habitats and times. Incorrect findings can be revised, and Inferra offers progressively clearer hints. Completing the investigation awards the **Sampling Compass**, marks sampling bias **understood**, and records the discovery in your DataDex.
-7. Return through the forest's western exit to **Harvest Village**, visit **Lyra's Lab**, read the report conversation, and choose **Share the field report**. Lyra and Rowan will plan broader weather observations. This completes the **Stage 1 main story**; it does not solve the entire Oracle mystery. **Quest journal** shows the next destination, why it matters, completion conditions, missing observation categories, and a button to walk toward the current objective.
-8. Optionally take Inferra's mastery challenge: select the plan that observes several habitats at different times using a consistent method. This advances the concept to **mastered**. The lesson distinguishes a broader sample from certainty about every creature.
-9. Optionally visit **Voltkit Glade** after Kai's battle. Approach Voltkit, **Scan**, lower its HP with a basic attack, then use **Bond**. Avoid defeating it before bonding. If a crystal fails, try again; if you defeat it or leave the encounter, return for another attempt. Bonding adds Voltkit to your party and DataDex. The **Sanctuary** in Harvest Village provides free healing and replenishes potions and Bond Crystals.
+1. **The broken forecast.** Name your Observer and follow the in-engine village scene. The Oracle predicts 0 mm; the gauge records 46 mm. Every line has subtitles and waits for you. Visit Lyra's laboratory and accept **The Missing Rainfall Records**.
+2. **Recover three originals, in any order.** At Mara's farm, move the damaged crate and preserve the ledger. At Bram's riverbank, follow the ripples, part the reeds, and retrieve the sheet. In Nell's shop, inspect the receipt, potion box, and tower-stamped document, then collect the register. Field interactions and pickups are separate saved steps.
+3. **Compare at the Weather Tower.** Orin's three reading panels show original historical rainfall of 12, 28, and 7 mm against Archive copies of 0 mm. Slide and inspect each pair, then complete the comparison. Today's 46 mm storm is displayed separately. Hear Lyra's discovery and explicitly accept the **DataDex**, research tracking, and 50 supply coins. The discrepancies establish unreliable copies; their cause remains unknown.
+4. **The First Bond.** Return to Lyra's laboratory. Help Statifox inspect a faulty sensor, Algobear align a gear, and Terradeer examine wet roots. Watch all three, inspect their stats, and confirm one starter. Previewing does not select a companion. Any starter can complete the story.
+5. **Practice with Kai.** Lyra lends a temporary Cloudfin. Use an attack, Guard, the free DataDex Scan, and Switch, then finish the match. The practice opponent cannot be defeated before all four actions are tried. Cloudfin returns after the lesson; your permanent starter receives its first EXP. Defeat heals the team and allows another attempt. The Sanctuary offers free care and restocking.
+6. **The village council.** Speak to Rowan in the square after the investigation and Kai's battle. Hear the council's decision to restore local observations, then commit to the expedition. **Act I complete** appears and Tomas permanently opens the northern gate.
+7. **Depart when ready.** Follow the northern road into Twin Scholars' Forest. You can return to the village at any time. Act I completion does not depend on recruiting Voltkit or any optional activity.
 
-Recruitment and mastery can be completed before or after the report and never block the main story. Open **DataDex** to review discoveries and the six field records. See the [Chapter One quest-flow guide](docs/chapter-one-quest-flow.md) for the full fourteen-quest sequence and the distinction between playable and planned content.
+Optional village activities: retrieve the scarf near the old bridge and return it to the child for 15 coins; read the old Observer journal for an Archive Fragment; find the hidden supply chest for a potion; clear the flooded garden for 5 research points; and bond with a wild Voltkit in the village grass after Kai. Reading the journal and helping the garden after comparing the records advances historical observation to **mastered**. Rewards cannot be claimed twice. Nell sells potions for 12 coins, Bond Crystals for 20, and antidotes for 10. No Act I encounter inflicts poison, so antidotes are carried for later travel.
 
-Return to Kai for a friendly rematch after recruiting Voltkit to try switching between companions.
+**Forest continuation:** Meet Inferra, accept her assignment, and record meadow, riverbank, and canopy in daylight and moonlight. Rest at Observer Camp to change time. Review all six categories and conclude that the ranger's canopy-at-night sample leaves out relevant habitats and times. Earn the Sampling Compass, then return to Lyra and explicitly share the field report. Sampling mastery and Voltkit recruitment remain optional. The rest of Chapter One is planned, as explained in the [quest-flow guide](docs/chapter-one-quest-flow.md).
+
+### Accessibility and preferences
+
+Help offers large text, instant/steady/slow dialogue reveal, WASD or IJKL movement with arrows always available, and separate **Adventure**, **Explorer**, and **Scholar** learning preferences. Explorer shows directions alongside the current objective; Scholar expands historical context. Every preference has the same story and available quests. **Standard** and **Relaxed** combat are selected separately between battles. A gradual dialogue line can be revealed immediately; enabling speech reveals it in full before narration. Character voices, music, and effects retain separate controls.
+
+A standard connected gamepad supports stick/D-pad movement, A to interact or activate the focused control, B to close, Start to open the journal, and D-pad focus navigation in dialogs. Browser and device support varies. Reduced-motion preferences disable the opening camera pan and animated weather. The opening can be replayed through Help and skipped after its first completion.
 
 ## Save and load
 
@@ -158,7 +165,7 @@ Every successful game action autosaves, including movement, observations, and ba
 
 Saves are browser-local and belong to the exact site origin. Different browsers, private windows, ports, `localhost` versus `127.0.0.1`, and a hosted copy have separate storage. Export/import transfers progress between them. If browser storage is unavailable, keep a JSON export. Invalid or unsupported imports show an error and preserve the current game.
 
-The save format is versioned (`schemaVersion: 1`) and uses stable species, habitat, and concept IDs. Supported save data is validated before loading. Earlier valid v1 saves gain the new village-report flag automatically without losing observations, companions, or unfinished battles. An older completed investigation can continue by returning to Lyra. Future schema versions require an explicit migration; this prototype does not promise compatibility with unimplemented chapters.
+The save format is versioned (`schemaVersion: 1`) and uses stable species, habitat, and concept IDs. Supported save data is validated before loading. Earlier valid v1 saves gain Act I defaults and preserve observations, companions, and unfinished battles. Existing partners and unlocked forest access remain valid; older saves do not have to replay the new investigation. Fresh saves preserve every field interaction, compared record, demonstration, borrowed training partner, optional reward, and council decision. Future schema versions require an explicit migration; this prototype does not promise compatibility with unimplemented chapters.
 
 ## Create future quests
 
@@ -182,10 +189,10 @@ npm.cmd test
 With the local server running and Microsoft Edge installed, an optional browser smoke test uses Edge’s standard debugging protocol with a fresh isolated profile:
 
 ```powershell
-node scripts/browser-smoke.mjs
+node scripts/act1-browser-smoke.mjs
 ```
 
-It writes screenshots and a verification report under `artifacts/`. Speech checks use a mock browser audio API to verify text synchronization, interruptions, controls, and unavailable-browser behavior; they do not verify audible output or voice quality. This README describes the checks available; consult their actual output for results.
+It writes `artifacts/act1-browser-smoke.json` and Act I desktop/mobile screenshots. The original `node scripts/browser-smoke.mjs` also remains available as a broader regression pass using migrated prototype saves. Its speech checks use a mock browser API to verify text synchronization, interruptions, controls, and unavailable-browser behavior; they do not verify audible output or voice quality. Consult each report for its actual results.
 
 Battle checks cover matching species on opposing sides, actor and target labels, turn order, damage and healing outcomes, keyboard access, desktop and mobile layout, and old and new save histories. Command checks cover descriptions, costs, disabled reasons, selection without spending resources, confirmation, and repeated keys. Battle screenshots are saved as `artifacts/battle-desktop.png` and `artifacts/battle-mobile.png`; command previews use `artifacts/battle-actions-desktop.png` and `artifacts/battle-actions-mobile.png`.
 
@@ -193,6 +200,6 @@ Progression checks cover EXP rewards, active-party attribution, threshold rollov
 
 Music tests cover MP3 loading and caching, late download and decode completion, generated backups, original rendered waveforms, scene priorities, crossfades, rapid transitions, volume and mute persistence, narration ducking, hidden-page pausing, and blocked-audio recovery. Browser checks exercise the real controls, decode all seven actual MP3s, and render procedural backup themes with native offline audio; headless checks do not verify audible speaker output. Local preview WAVs and a render report can be generated from `renderMusicSamples` in `dist/music-tracks.js`.
 
-The game is buildless HTML, CSS, and JavaScript. `dist/engine.js` contains serializable rules and save validation; `dist/quests.js` derives objectives, journey steps, and missing field categories from that state; `dist/world.js` contains maps and programmatically drawn pixel artwork; `dist/app.js` connects exploration, combat, investigation, and browser storage. `dist/dialogue.js` stores segmented conversations and navigation, while `dist/portraits.js` renders character portraits and expressions as accessible inline SVG. `dist/speech.js` manages optional spoken dialogue, character delivery, and the voice preference. `scripts/serve.mjs` serves the playable `dist/` folder. For dialogue contributions, see the [character voice guide](docs/character-voices.md).
+The game is buildless HTML, CSS, and JavaScript. `dist/act1-ui.js` presents village activities and record panels; `dist/preferences.js` keeps browser-local accessibility settings separate from quest progress. `dist/engine.js` contains serializable rules and save validation; `dist/quests.js` derives objectives, journey steps, and missing field categories from that state; `dist/world.js` contains maps and programmatically drawn pixel artwork; `dist/app.js` connects exploration, combat, investigation, and browser storage. `dist/dialogue.js` stores segmented conversations and navigation, while `dist/portraits.js` renders character portraits and expressions as accessible inline SVG. `dist/speech.js` manages optional spoken dialogue, character delivery, and the voice preference. `scripts/serve.mjs` serves the playable `dist/` folder. For dialogue contributions, see the [character voice guide](docs/character-voices.md).
 
-This is **Stage 1**, not the full Chapter One: later regions, the remaining quests and roster, evolutions, the Oracle finale, and a full chapter expansion framework remain future work. The pixel scenery and creature illustrations are original code-native prototype artwork.
+The complete Act I and the existing forest investigation are playable. Later chapter regions, the remaining roster, evolutions, and the Oracle finale remain future work. Pixel scenery, weather effects, character portraits, and creature illustrations use the existing original code-native artwork system.

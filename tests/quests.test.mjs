@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { HABITATS, SPECIES, createGame, act, serializeGame } from '../dist/engine.js';
+import { HABITATS, SPECIES, createGame as createAct1Game, act, serializeGame } from '../dist/engine.js';
+import { createLegacyGame as createGame } from './fixtures.mjs';
 import { getQuestGuide, getJourneySteps, getMissingObservations } from '../dist/quests.js';
 
 const step = (state, action, rng) => act(state, action, rng).state;
@@ -147,4 +148,68 @@ test('optional recruitment and mastery do not skip the active main objective', (
   view = readGuide(state);
   assert.equal(view.guide.id, 'stage-one-complete');
   assertJourney(view.journey, 6);
+});
+
+test('Act I guidance follows field actions, comparison, demonstrations, and council', () => {
+  let state = createAct1Game();
+  const view = () => readGuide(state);
+  assert.equal(view().guide.id, 'rainfall-records');
+  assert.equal(view().journey.length, 13);
+  assert.equal(view().journey[0].current, true);
+  state = step(state, {type:'ACT1_INTRO_COMPLETE'});
+  assert.match(view().guide.text, /Visit Professor Lyra/);
+  state = step(state, {type:'ACT1_START'});
+  assert.equal(view().guide.targetId, 'farm');
+  state = step(state, {type:'ACT1_FIELD_ACTION',id:'farm_crate'});
+  assert.match(view().guide.hint, /crate has been moved.*Pick up/);
+  state = step(state, {type:'ACT1_COLLECT_RECORD',id:'farm'});
+  assert.equal(view().guide.targetId, 'river');
+  state = step(state, {type:'ACT1_FIELD_ACTION',id:'river_reeds'});
+  assert.match(view().guide.hint, /located.*Retrieve/);
+  state = step(state, {type:'ACT1_COLLECT_RECORD',id:'river'});
+  assert.equal(view().guide.targetId, 'shop');
+  for (const id of ['shop_tower','shop_box','shop_receipt']) state = step(state, {type:'ACT1_FIELD_ACTION',id});
+  assert.match(view().guide.hint, /All three objects have been inspected/);
+  state = step(state, {type:'ACT1_COLLECT_RECORD',id:'shop'});
+  assert.equal(view().guide.targetId, 'tower');
+  assert.match(view().guide.count, /0 \/ 3 record pairs/);
+  for (const id of ['shop','farm','river']) state = step(state, {type:'ACT1_COMPARE_RECORD',id});
+  assert.match(view().guide.hint, /All three discrepancies are marked/);
+  state = step(state, {type:'ACT1_COMPLETE_COMPARISON'});
+  assert.match(view().guide.completeWhen, /activate the DataDex/);
+  state = step(state, {type:'ACT1_RECEIVE_DEX'});
+  assert.deepEqual([view().guide.id,view().guide.targetId], ['first-bond','lab']);
+  for (const id of ['creature_terradeer','creature_statifox','creature_algobear']) state = step(state, {type:'ACT1_DEMO',id});
+  assert.match(view().guide.completeWhen, /Choose one starter/);
+  state = step(state, {type:'CHOOSE_STARTER',speciesId:'creature_terradeer'});
+  assert.equal(view().guide.targetId, 'kai');
+  assert.match(view().guide.text, /Attack, Guard.*Scan.*Switch.*Cloudfin/);
+  state = step(state, {type:'START_BATTLE',kind:'rival'});
+  state = step(state, {type:'BATTLE_MOVE',moveId:'observe_strike'});
+  state = step(state, {type:'BATTLE_GUARD'});
+  state = step(state, {type:'BATTLE_SCAN'});
+  state = step(state, {type:'BATTLE_SWITCH',index:1});
+  for (let turn = 0; state.battle && turn < 30; turn++) {
+    state = step(state, {type:'BATTLE_MOVE',moveId:'observe_strike'});
+  }
+  assert.equal(state.flags.rivalDefeated, true);
+  assert.deepEqual([view().guide.id,view().guide.targetId], ['village-council','rowan']);
+  state = step(state, {type:'ACT1_COUNCIL_COMPLETE'});
+  assert.deepEqual([view().guide.id,view().guide.targetId], ['act-one-complete','gate']);
+  assert.match(view().guide.text, /northern village road/);
+  state = travel(state, 'forest');
+  assert.deepEqual([view().guide.id,view().guide.targetId], ['nocturnal','inferra']);
+  assert.equal(view().journey.filter(row => row.done).length, 9);
+});
+
+test('Act I collection hints ignore recovered records and optional discoveries', () => {
+  let state = step(step(createAct1Game(), {type:'ACT1_INTRO_COMPLETE'}), {type:'ACT1_START'});
+  for (const id of ['shop_box','shop_receipt','shop_tower']) state = step(state, {type:'ACT1_FIELD_ACTION',id});
+  state = step(state, {type:'ACT1_COLLECT_RECORD',id:'shop'});
+  state = step(state, {type:'ACT1_SIDE_ACTION',id:'old_journal'});
+  const {guide,journey} = readGuide(state);
+  assert.equal(guide.targetId, 'farm');
+  assert.match(guide.count, /1 \/ 3/);
+  assert.doesNotMatch(guide.hint, /shop|journal/i);
+  assert.equal(journey.filter(row => row.done).length, 2);
 });

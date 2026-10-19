@@ -5,7 +5,8 @@ import { spawn } from 'node:child_process';
 import { access, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { SPEECH_PREFERENCE_KEY } from '../dist/speech.js';
-import { act, createGame, serializeGame, SPECIES } from '../dist/engine.js';
+import { act, serializeGame, SPECIES } from '../dist/engine.js';
+import { createLegacyGame as createGame } from '../tests/fixtures.mjs';
 
 const url = process.env.CHRONICLES_TEST_URL || 'http://127.0.0.1:4173';
 const artifactDir = resolve(import.meta.dirname, '../artifacts');
@@ -1258,6 +1259,10 @@ try {
   await cdp('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: downloadDir }, null);
   await cdp('Page.setInterceptFileChooserDialog', { enabled: true });
   await cdp('Page.addScriptToEvaluateOnNewDocument', { source: audioMockSource });
+  // This broad regression suite exercises continuation of the original prototype.
+  // The dedicated act1-browser-smoke.mjs verifies the fresh investigation-first route.
+  const legacyOpening=serializeGame(createGame());
+  await cdp('Page.addScriptToEvaluateOnNewDocument', {source:`if(!localStorage.getItem(${JSON.stringify(saveKey)}))localStorage.setItem(${JSON.stringify(saveKey)},${JSON.stringify(legacyOpening)});`});
   await checkBackgroundMusic();
   await checkSpokenDialogue();
   await cdp('Page.navigate', { url });

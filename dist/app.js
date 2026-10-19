@@ -1,5 +1,7 @@
-import { SPECIES, HABITATS, createGame, act, saveGame, loadGame, serializeGame, parseGame, SAVE_KEY } from './engine.js';
-import { MAPS, isWalkable, renderWorld, drawCreature } from './world.js';
+import { SPECIES, HABITATS, ACT1_RECORDS, getAct1TutorialStep, createGame, act, saveGame, loadGame, serializeGame, parseGame, SAVE_KEY } from './engine.js';
+import { act1ConversationActions, act1SpecialModal, act1IntroMarkup, act1TutorialMarkup } from './act1-ui.js';
+import { readPreferences, setPreference, preferencesMarkup } from './preferences.js';
+import { MAPS, isWalkable, restoreMapPosition, renderWorld, drawCreature } from './world.js';
 import { getConversation, createDialogue, currentSegment, advanceDialogue, previousDialogue, isDialogueComplete } from './dialogue.js';
 import { resolveSpeaker, portraitMarkup } from './portraits.js';
 import { createSpeechController } from './speech.js';
@@ -17,10 +19,7 @@ let storage = null;
 let resumed = false;
 let savingAvailable = true;
 let unreadableSave = false;
-const checkedWorldState = candidate => {
-  if (!isWalkable(candidate.map,candidate.player.x,candidate.player.y)) throw new Error('The saved player position is outside the walkable map.');
-  return candidate;
-};
+const checkedWorldState = restoreMapPosition;
 try {
   storage = window.localStorage;
   const loaded = loadGame(storage);
@@ -28,6 +27,10 @@ try {
     try { state = checkedWorldState(loaded); resumed = true; } catch { unreadableSave = true; }
   } else if (storage.getItem(SAVE_KEY) !== null) unreadableSave = true;
 } catch { savingAvailable = false; }
+let preferences=readPreferences(storage);
+document.body.classList.toggle('large-text',preferences.textSize==='large');
+let revealTimer=null, revealSegment=null, revealCount=0;
+let revealing=false;
 let modal = null;
 let modalData = {};
 let activeDialogue = null;
@@ -146,7 +149,8 @@ function updateMusicControls(next=music?.getState()) {
 function syncMusic() {
   music.setDialogueActive(!!activeDialogue);
   music.setNarrating(speech.getState().status==='speaking');
-  music.setScene(getMusicScene(state,{modal,modalData,dialogueActive:!!activeDialogue}));
+  const sceneData=modal==='act1-intro'?{...modalData,introStorm:activeDialogue.index>=1}:modalData;
+  music.setScene(getMusicScene(state,{modal,modalData:sceneData,dialogueActive:!!activeDialogue}));
   updateMusicControls();
 }
 
@@ -198,6 +202,10 @@ function dispatch(action, {quiet = false} = {}) {
   try {
     const result = act(state, action);
     state = result.state;
+    if (action.type.startsWith('BATTLE_') && state.battle && !state.act1.migrated) {
+      const next = getAct1TutorialStep(state);
+      if (next) battleCategory=next==='attack'?'skills':next==='switch'?'party':'commands';
+    }
     if (action.type==='START_BATTLE') {battleSelection=null;battleCategory='skills';battleFeedback='';}
     else if (action.type.startsWith('BATTLE_')) {battleSelection=null;battleFeedback=result.events?.[0]||'Action complete.';}
     persist();
@@ -207,7 +215,7 @@ function dispatch(action, {quiet = false} = {}) {
       const won = before.battle.kind === 'rival' && (result.events || []).some(event => event.startsWith('Kai:'));
       const recruited = !before.flags.recruitedVoltkit && state.flags.recruitedVoltkit;
       modal = 'battle-result';
-      modalData = {won, recruited, events:result.events || [],kind:before.battle.kind,battleEvents:result.battleEvents || [],progression:result.battleProgression};
+      modalData = {won, recruited, tutorial:before.battle.kind==='rival'&&!before.act1.migrated&&!before.flags.rivalDefeated, events:result.events || [],kind:before.battle.kind,battleEvents:result.battleEvents || [],progression:result.battleProgression};
       activeDialogue = prepareDialogue(modal,modalData);
       chime(won || recruited ? 'success' : 'action');
     }
@@ -244,6 +252,8 @@ function paintPortraits(root = document) {
 function updateUI() {
   const forest = state.map === 'forest';
   $('location-title').textContent = forest ? 'Twin Scholars’ Forest' : 'Harvest Village';
+  $('dex-button').disabled = !state.act1.dexReceived;
+  $('dex-button').title = state.act1.dexReceived?'Open DataDex':'Recover and compare the rainfall records to activate your DataDex';
   $('region-label').textContent = forest ? 'Route 01 · A question in the trees' : 'Your home in the Vale of Records';
   $('time-button').innerHTML = state.time === 'night' ? '☾ <span>Nighttime</span>' : '☀ <span>Daytime</span>';
   $('time-button').title = forest ? 'Walk to the campfire to change time' : 'Day and night change at the forest campfire';
@@ -251,9 +261,12 @@ function updateUI() {
   $('map-coordinates').textContent = forest ? 'TWIN SCHOLARS · ROUTE 01' : 'VALE OF RECORDS · 01';
   $('world').setAttribute('aria-label', `${forest ? 'Twin Scholars’ Forest' : 'Harvest Village'}, ${state.time}. Use arrow keys or WASD to walk. E to interact. Click a destination.`);
   const objective = objectiveContent();
-  $('objective').innerHTML = `<div class="eyebrow">CURRENT OBJECTIVE</div><h3>${esc(objective.title)}</h3><p class="quest-motivation">${esc(objective.why)}</p><p>${esc(objective.text)}</p><div class="objective-progress"><i style="width:${objective.progress}%"></i></div><div class="objective-count">${esc(objective.count)}</div>`;
+  $('objective').innerHTML = `<div class="eyebrow">CURRENT OBJECTIVE</div><h3>${esc(objective.title)}</h3><p class="quest-motivation">${esc(objective.why)}</p><p>${esc(objective.text)}</p>${preferences.learning==='explorer'?`<p class="evidence-note">${esc(objective.hint)}</p>`:''}<div class="objective-progress"><i style="width:${objective.progress}%"></i></div><div class="objective-count">${esc(objective.count)}</div>`;
   const steps = getJourneySteps(state);
-  $('journey-list').innerHTML = steps.map((s,i) => {
+  const activeStep=Math.max(0,steps.findIndex(s=>s.current));
+  const firstVisible=state.act1.migrated?0:Math.max(0,Math.min(activeStep-2,steps.length-6));
+  $('journey-list').innerHTML = steps.slice(firstVisible,firstVisible+6).map((s,index) => {
+    const i=firstVisible+index;
     return `<li class="${s.done ? 'done' : s.current ? 'current' : ''}"><span class="step-circle">${s.done ? '✓' : i+1}</span>${esc(s.title)}</li>`;
   }).join('');
   $('party-count').textContent = `${state.party.length} / 4`;
@@ -319,6 +332,26 @@ function interact(target = nearTarget()) {
   if (state.battle) { openModal('battle'); return; }
   if (!target) { openModal('places'); return; }
   path=[]; pathTarget=null;
+  const legacyPresentation=state.act1.migrated&&['lab','kai','tower','sanctuary','home','gate'].includes(target.id);
+  if (state.act1 && state.map==='village' && !legacyPresentation) {
+    if (!state.act1.introComplete) {openModal('act1-intro');return;}
+    const villageConversations={farm:'act1-farm',river:'act1-river',shop:'act1-shop',tower:'act1-tower',home:'act1-home',sanctuary:'act1-sanctuary'};
+    if (villageConversations[target.id]) {openModal(villageConversations[target.id]);return;}
+    if (['scarf','child','observer','supply','garden'].includes(target.id)) {openModal('act1-side',{id:target.id});return;}
+    if (target.id==='lab' && !state.act1.dexReceived) {openModal('act1-lyra');return;}
+    if (target.id==='lab' && !state.starter) {openModal('act1-bond');return;}
+    if (target.id==='rowan') {
+      if (state.flags.rivalDefeated && state.act1.dexReceived) openModal('act1-council');
+      else openModal('act1-gate');
+      return;
+    }
+    if (target.id==='gate' && !state.act1.migrated && !state.act1.councilComplete) {openModal('act1-gate');return;}
+    if (target.id==='wild') {
+      if (state.flags.rivalDefeated) openModal('wild');
+      else openModal('act1-gate');
+      return;
+    }
+  }
   if (target.id === 'lab') { openModal(!state.starter ? 'starters' : quest().status === 'complete' && !state.flags.reportedToLyra ? 'lyra-report' : 'lyra'); }
   else if (target.id === 'kai') {
     if (!state.starter) { openDialogue('Kai','A friendly challenge','', 'kai-before-starter'); }
@@ -344,6 +377,7 @@ function openDialogue(title, subtitle, text, conversationId, options = {}) {
   openModal('dialogue',{title,subtitle,text,conversationId,...options});
 }
 function openModal(type, data = {}) {
+  if (type==='dex' && !state.act1.dexReceived) {toast('The DataDex activates after you recover and compare the three rainfall records.');return;}
   if (!modal) returnFocus=document.activeElement;
   battleSelection=null;
   if (type==='battle') battleFeedback='';
@@ -358,6 +392,7 @@ function closeModal() {
     toast('Finish this encounter, or flee from a wild battle.'); return;
   }
   speech.sync(null);
+  clearTimeout(revealTimer);revealSegment=null;revealing=false;
   battleLogObserver?.disconnect();
   battleLogObserver=null;
   modal=null; modalData={}; activeDialogue=null; $('modal-root').innerHTML=''; $('dialogue-announcer').textContent=''; updatePrompt();
@@ -369,12 +404,12 @@ const conversationTypes = new Set(['starters','lyra','lyra-report','report-compl
 
 function prepareDialogue(type, data = {}) {
   const context={
-    playerName:state.player.name,starterName:creatureName(state.starter),
+    playerName:state.player.name,starterName:creatureName(state.starter),hasStarter:!!state.starter,act1:state.act1,
     rivalDefeated:state.flags.rivalDefeated,questStatus:quest().status,
     observationCount:observations().length,mastered:conceptStatus('concept_sampling_bias')==='mastered',
     recruited:state.flags.recruitedVoltkit,reportedToLyra:state.flags.reportedToLyra,time:state.time,...data
   };
-  if (conversationTypes.has(type)) {
+  if (conversationTypes.has(type) || type.startsWith('act1-') && !['act1-starter-confirm','act1-completion'].includes(type)) {
     const conversation=getConversation(type,context);
     if (type==='mastery' && conceptStatus('concept_sampling_bias')==='mastered') {
       conversation.title='A thoughtful field researcher';
@@ -404,12 +439,14 @@ function dialogueMarkup() {
     <div class="speaker-portrait">${portraitMarkup(speaker.id,expression,state.player.name)}</div>
     <div class="dialogue-copy"><div class="speaker-heading"><h3 id="dialogue-speaker">${esc(speaker.name)}</h3><span>${esc(speaker.role)}</span></div><p id="dialogue-line">${esc(segment.text)}</p></div>
     <div class="dialogue-controls"><div class="dialogue-position"><span>${index+1} <i>/</i> ${conversation.segments.length}</span><small>${complete?'Choose an option below':'Enter · Space · E to advance'}</small></div><div class="dialogue-buttons"><button class="secondary-button small-button" data-action="dialogue-back" aria-label="Previous dialogue segment" ${index===0?'disabled':''}>← Back</button><button class="primary-button small-button" data-action="dialogue-next" aria-label="Next dialogue segment" ${complete?'disabled':''}>${complete?'All read ✓':'Next →'}</button></div></div>
-    ${speechControlsMarkup()}
+    ${speechControlsMarkup()}${preferences.dialogueSpeed!=='instant'?'<button class="secondary-button small-button" data-action="dialogue-reveal">Show the whole line</button>':''}
   </section>`;
 }
 
 function conversationActions() {
   if (!isDialogueComplete(activeDialogue)) return '';
+  const act1Actions=act1ConversationActions(state,modal,modalData,{esc,portrait});
+  if (act1Actions!==null) return act1Actions;
   const close='<button class="secondary-button" data-action="close">Continue exploring</button>';
   if (modal==='starters') {
     const descriptions={creature_statifox:'Recognizes patterns. Agile and observant.',creature_algobear:'Plans efficient attacks. Sturdy and precise.',creature_terradeer:'Understands the environment. Balanced and restorative.'};
@@ -419,7 +456,7 @@ function conversationActions() {
   if (modal==='lyra') return `<div class="modal-actions"><button class="primary-button" data-action="dex">Open DataDex</button>${close}</div>`;
   if (modal==='lyra-report') return `<div class="dialogue-followup"><div class="evidence-note">Your report: six habitat/time records, a finding about missing coverage, and the Sampling Compass.</div><div class="modal-actions"><button class="primary-button" data-action="report-findings">Share the field report</button>${close}</div></div>`;
   if (modal==='report-complete') return `<div class="dialogue-followup completion"><div class="completion-mark">✧</div><h3>Your first expedition is complete.</h3><p>Lyra has your findings. Harvest Village will compare weather observations from more places and times. The cause of the Oracle’s failed forecast remains an open question.</p><div class="modal-actions"><button class="primary-button" data-action="journal">Review your journey</button>${close}</div></div>`;
-  if (modal==='rival') return `<div class="dialogue-followup"><div class="evidence-note">Potions restore HP. After recruiting another companion, switching takes a turn.</div><div class="modal-actions"><button class="primary-button" data-action="start-battle" data-kind="rival">Challenge Kai ⚔</button>${close}</div></div>`;
+  if (modal==='rival') return `<div class="dialogue-followup"><div class="evidence-note">${!state.act1.migrated&&!state.flags.rivalDefeated?'Lyra lends a training Cloudfin so you can practice switching. Try attack, guard, Scan, and switch, then finish the friendly match. Cloudfin returns after training.':'Potions restore HP. Switching between companions takes a turn.'}</div><div class="modal-actions"><button class="primary-button" data-action="start-battle" data-kind="rival">Challenge Kai ⚔</button>${close}</div></div>`;
   if (modal==='sanctuary') return `<div class="dialogue-followup"><div class="settings-grid"><div class="settings-row"><div><strong>Restore your party</strong><p>Recover all HP and Focus. Always free.</p></div><button class="primary-button small-button" data-action="heal">Heal party</button></div><div class="settings-row"><div><strong>Field supplies</strong><p>Replenish potions and Bond Crystals.</p></div><button class="secondary-button small-button" data-action="restock">Restock</button></div></div><div class="modal-actions">${close}</div></div>`;
   if (modal==='tower') return `<div class="dialogue-followup"><div class="forecast-strip"><div><span>ORACLE PREDICTION</span><strong>0 mm</strong></div><div><span>MEASURED RAINFALL</span><strong class="rain">46 mm</strong></div></div><div class="modal-actions"><button class="primary-button" data-action="dex">Review observations</button>${close}</div></div>`;
   if (modal==='inferra') {
@@ -450,14 +487,46 @@ function conversationModal() {
   const subtitle=modalData.subtitle || conversation.subtitle;
   const battleRecap=modal==='battle-result'&&modalData.battleEvents?.length?battleTimeline(modalData.battleEvents,true):'';
   const progression=modal==='battle-result'&&modalData.progression?battleProgressionMarkup(modalData.progression):'';
-  return modalShell(title,subtitle,progression+dialogueMarkup()+battleRecap+conversationActions(),{wide:modal==='starters'||modal==='battle-result'});
+  const intro=modal==='act1-intro'?act1IntroMarkup(activeDialogue.index):'';
+  const skipIntro=modal==='act1-intro'&&state.act1.introComplete?'<div class="modal-actions"><button class="secondary-button" data-action="close">Skip opening</button></div>':'';
+  return modalShell(title,subtitle,intro+progression+dialogueMarkup()+battleRecap+conversationActions()+skipIntro,{wide:['starters','battle-result','act1-bond','act1-tower','act1-intro'].includes(modal)});
 }
 
 function moveDialogue(direction) {
   if (!activeDialogue) return;
+  if (direction!=='back' && revealing) {finishDialogueReveal();return;}
   activeDialogue=direction==='back'?previousDialogue(activeDialogue):advanceDialogue(activeDialogue);
   renderModal();
   chime();
+}
+
+function finishDialogueReveal() {
+  clearTimeout(revealTimer);revealing=false;
+  if (!activeDialogue) return;
+  revealSegment=currentSegment(activeDialogue);revealCount=revealSegment.text.length;
+  if ($('dialogue-line')) $('dialogue-line').textContent=revealSegment.text;
+  const followup=$('modal-root').querySelector('.dialogue-followup');
+  if (followup) followup.hidden=false;
+  speech.sync(revealSegment);
+}
+
+function syncDialogueReveal() {
+  clearTimeout(revealTimer);
+  const segment=activeDialogue?currentSegment(activeDialogue):null;
+  if (!segment) {revealing=false;revealSegment=null;speech.sync(null);return;}
+  if (segment!==revealSegment) {revealSegment=segment;revealCount=0;}
+  if (preferences.dialogueSpeed==='instant'||speech.getState().enabled||revealCount>=segment.text.length) {finishDialogueReveal();return;}
+  revealing=true;speech.sync(null);
+  const followup=$('modal-root').querySelector('.dialogue-followup');
+  if (followup) followup.hidden=true;
+  const tick=()=>{
+    if (!activeDialogue||currentSegment(activeDialogue)!==segment||!$('dialogue-line')) return;
+    revealCount=Math.min(segment.text.length,revealCount+2);
+    $('dialogue-line').textContent=segment.text.slice(0,revealCount);
+    if (revealCount>=segment.text.length) finishDialogueReveal();
+    else revealTimer=setTimeout(tick,preferences.dialogueSpeed==='slow'?65:30);
+  };
+  tick();
 }
 
 function modalShell(title, subtitle, body, {wide=false,battle=false}={}) {
@@ -475,8 +544,10 @@ function renderModal({resetFocus=false} = {}) {
   const logFocused=!resetFocus&&document.activeElement===previousLog;
   const logPosition=!resetFocus&&previousLog&&previousLog.scrollHeight-previousLog.scrollTop-previousLog.clientHeight>8?previousLog.scrollTop:null;
   let html='';
-  if (modal === 'welcome') {
-    html=modalShell('Every adventure begins with a question.','WELCOME, OBSERVER',`<div class="welcome-art"><span class="diamond">✧</span>${portrait('creature_statifox')}${portrait('creature_algobear')}${portrait('creature_terradeer')}</div><div class="forecast-strip"><div><span>ORACLE FORECAST · DAY 127</span><strong>0 mm</strong></div><div><span>ACTUAL RAINFALL</span><strong class="rain">46 mm</strong></div><div><span>ARCHIVE STATUS</span><strong style="font-size:17px">“Perfect.”</strong></div></div><p>The Oracle promised dry skies. Rain drums on Harvest Village's roofs. In her lab, Professor Lyra weighs a perfect forecast against a very wet notebook.</p><label class="name-label" for="observer-name">What should we call you?</label><input id="observer-name" class="text-input" autocomplete="nickname" maxlength="24" value="Observer" placeholder="Your name"><div class="modal-actions"><button class="primary-button" data-action="begin">Begin your journey <span>→</span></button><button class="secondary-button" data-action="close">Explore the village</button></div><p class="save-info">A short, complete prototype adventure. Progress saves in this browser after every action.</p>`);
+  const act1Special=act1SpecialModal(state,modal,modalData,{esc,portrait,shell:modalShell});
+  if (act1Special) html=act1Special;
+  else if (modal === 'welcome') {
+    html=modalShell('Every adventure begins with a question.','ACT I · THE BROKEN FORECAST',`<div class="welcome-art"><span class="diamond">✧</span>${portrait('creature_statifox')}${portrait('creature_algobear')}${portrait('creature_terradeer')}</div><p>Harvest Village trusts the Oracle’s promise of dry skies. Your first adventure begins on the morning that promise breaks.</p><label class="name-label" for="observer-name">What should we call you?</label><input id="observer-name" class="text-input" autocomplete="nickname" maxlength="24" value="Observer" placeholder="Your name"><div class="modal-actions"><button class="primary-button" data-action="begin">Begin your journey <span>→</span></button><button class="secondary-button" data-action="close">Explore the village</button></div><p class="save-info">Recover scattered records, choose a Databeast, train with Kai, and help the council decide what comes next. Your progress saves after every action.</p>`);
   } else if (activeDialogue) {
     html=conversationModal();
   } else if (modal === 'habitat') {
@@ -493,15 +564,16 @@ function renderModal({resetFocus=false} = {}) {
   } else if (modal === 'places') {
     html=modalShell('Follow the village paths',state.map==='forest'?'TWIN SCHOLARS’ FOREST · PLACES TO VISIT':'HARVEST VILLAGE · PLACES TO VISIT',`<p>Click a place below to walk there. You can also click directly on the map or use WASD and the arrow keys.</p><div class="destination-list">${currentTargets().filter(t=>t.id!=='sign').map(t=>`<button data-action="walk-to" data-id="${esc(t.id)}">${esc(t.name)} <span style="float:right">↗</span></button>`).join('')}</div>`);
   } else if (modal === 'help') {
-    html=modalShell('Your first field guide','THE CHRONICLES OF DATA · STAGE 1',`<p>Explore a small original RPG world, form a team, and uncover a misleading claim by collecting evidence. You can complete the investigation with any starter.</p><table class="control-table"><tr><td>Walk</td><td>WASD / arrow keys / click map</td></tr><tr><td>Talk, observe, or enter</td><td>E / Space / click a place</td></tr><tr><td>Open DataDex</td><td>X</td></tr><tr><td>Save & load</td><td>P</td></tr><tr><td>Close a dialog</td><td>Escape</td></tr></table><p>Choose a companion in Lyra’s lab, battle Kai, then enter the forest from the eastern gate. Speak to Inferra and observe each habitat by day and night. Rest at the campfire to change time.</p><p>Visit the sanctuary for free healing and supplies. Battles are turn based: scan, attack, guard, switch, use a potion, or bond with a weakened wild creature.</p><div class="evidence-note">This prototype includes one village, one route, three starters, Kai’s battle, Voltkit recruitment, and one complete investigation. Later chapter regions and evolutions belong to future stages.</div><div class="modal-actions"><button class="primary-button" data-action="close">Back to the adventure</button><button class="secondary-button" data-action="places">Places to visit</button></div>`);
+    html=helpModal();
   }
   battleLogObserver?.disconnect();
   battleLogObserver=null;
   $('modal-root').innerHTML=html;
   syncMusic();
-  speech.sync(activeDialogue ? currentSegment(activeDialogue) : null);
+  syncDialogueReveal();
   updateSpeechControls();
   paintPortraits($('modal-root'));
+  if ($('intro-world')) renderWorld($('intro-world'),{...state,map:'village',act1Scene:activeDialogue.index===0?'calm':activeDialogue.index<3?'storm':'aftermath'},{reduceMotion:reducedMotion});
   const root=$('modal-root');
   let focusable;
   if (activeDialogue) {
@@ -542,7 +614,12 @@ function questJournalModal() {
   const target = objectiveDestination();
   const missing = getMissingObservations(state);
   const stages = getJourneySteps(state);
-  return modalShell('Your quest journal','THE FIRST EXPEDITION',`<div class="quest-brief"><p class="eyebrow">${esc(guide.count)}</p><h3>${esc(guide.title)}</h3><p>${esc(guide.why)}</p><h4>What to do</h4><p>${esc(guide.text)}</p><h4>Complete when</h4><p>${esc(guide.completeWhen)}</p><div class="evidence-note"><strong>If you’re stuck</strong><br>${esc(guide.hint)}</div></div><ol class="quest-route">${stages.map(step=>`<li class="${step.done?'done':step.current?'current':''}" ${step.current?'aria-current="step"':''}>${step.done?'✓ ':''}${esc(step.title)}</li>`).join('')}</ol>${quest().status==='active'?`<h3>Still to record</h3><ul class="quest-missing">${missing.map(row=>`<li>${esc(row.label)}</li>`).join('')}</ul>`:''}<div class="modal-actions">${target?`<button class="primary-button" data-action="next-objective">Walk to ${esc(target.name)}</button>`:''}${quest().status!=='locked'?'<button class="secondary-button" data-action="investigation">Review field evidence</button>':''}<button class="secondary-button" data-action="close">Back to the field</button></div><div class="quest-optional"><h3>Optional discoveries</h3><p>These do not block the main story.</p><p>${state.flags.recruitedVoltkit?'✓ Voltkit bonded':'◇ Befriend Voltkit at Spark Glade after Kai’s battle. Scan, weaken, then offer a Bond Crystal.'}</p><p>${conceptStatus('concept_sampling_bias')==='mastered'?'✓ Sampling mastery recorded':'✧ Plan a stronger sample with Inferra after the investigation.'}</p><p>The Weather Tower’s rainfall book adds context to the village’s failed forecast. Later Chapter One regions are future content.</p></div>`);
+  const side=state.act1.side;
+  return modalShell('Your quest journal','THE FIRST EXPEDITION',`<div class="quest-brief"><p class="eyebrow">${esc(guide.count)}</p><h3>${esc(guide.title)}</h3><p>${esc(guide.why)}</p><h4>What to do</h4><p>${esc(guide.text)}</p><h4>Complete when</h4><p>${esc(guide.completeWhen)}</p><div class="evidence-note"><strong>If you’re stuck</strong><br>${esc(guide.hint)}</div></div><ol class="quest-route">${stages.map(step=>`<li class="${step.done?'done':step.current?'current':''}" ${step.current?'aria-current="step"':''}>${step.done?'✓ ':''}${esc(step.title)}</li>`).join('')}</ol>${quest().status==='active'?`<h3>Still to record</h3><ul class="quest-missing">${missing.map(row=>`<li>${esc(row.label)}</li>`).join('')}</ul>`:''}<div class="modal-actions">${target?`<button class="primary-button" data-action="next-objective">Walk to ${esc(target.name)}</button>`:''}${quest().status!=='locked'?'<button class="secondary-button" data-action="investigation">Review field evidence</button>':''}<button class="secondary-button" data-action="close">Back to the field</button></div><div class="quest-optional"><h3>Optional village discoveries</h3><p>These do not block the main story.</p><p>${side.scarfReturned?'✓ Lost scarf returned':side.scarfFound?'◇ Return the scarf to the child in the residential lane.':'◇ Look near the old bridge for a lost scarf.'}</p><p>${side.oldJournal?'✓ Observer journal read · Archive Fragment preserved':'◇ Read the old Observer journal west of the square.'}</p><p>${side.supplyChest?'✓ Hidden supply chest opened':'◇ Find a supply chest behind Nell’s shop.'}</p><p>${side.gardenCleared?'✓ Flooded garden drained':'◇ Clear debris from the flooded garden.'}</p><p>${state.flags.recruitedVoltkit?'✓ Voltkit bonded':'◇ Befriend Voltkit in the village grass after Kai’s battle. Scan, weaken, then offer a Bond Crystal.'}</p><p>${conceptStatus('concept_sampling_bias')==='mastered'?'✓ Sampling mastery recorded':'✧ Plan a stronger sample with Inferra after the forest investigation.'}</p></div>`);
+}
+
+function helpModal() {
+  return modalShell('Your first field guide','ACT I · THE BROKEN FORECAST',`<p>Recover three original weather records, compare them at the tower, and activate your DataDex. Meet all three starters at Lyra’s lab, confirm one partner, practice with Kai, then join Rowan’s council to open the northern road.</p><table class="control-table"><tr><td>Walk</td><td>${preferences.movement==='ijkl'?'IJKL':'WASD'} / arrow keys / click map</td></tr><tr><td>Talk or advance dialogue</td><td>E / Space / Enter in dialogue</td></tr><tr><td>Quest journal</td><td>Q / J (WASD preset)</td></tr><tr><td>DataDex / Save & load</td><td>X / P</td></tr><tr><td>Close a dialog</td><td>Escape</td></tr></table><p>All three starters can complete the story. Elin’s Sanctuary offers free healing and supplies. After the council, the forest investigation remains available and the village stays open.</p><h3>Comfort & controls</h3>${preferencesMarkup(preferences,state.act1.combatDifficulty)}<p>Dialogue waits for you. With a gradual reveal, press Next once to reveal the current line, then again to advance. Enabling voice reveals the entire line before it is spoken. Your device’s reduced-motion setting disables camera panning and weather animation.</p><div class="modal-actions"><button class="primary-button" data-action="close">Back to the adventure</button><button class="secondary-button" data-action="places">Places to visit</button>${state.act1.introComplete?'<button class="secondary-button" data-action="act1-replay-intro">Replay the opening</button>':''}</div>`);
 }
 
 function investigationModal() {
@@ -589,7 +666,7 @@ function battleProgressionMarkup(progression) {
   const title=outcome==='bond'?'A bond worth growing':won?(levelUps.length?'Your partner grows stronger':'Experience earned'):'Experience this encounter';
   return `<section class="battle-progression" data-outcome="${esc(outcome)}" tabindex="-1" aria-labelledby="battle-progression-title">
     <div class="battle-reward-heading"><div><p class="battle-reward-eyebrow">Encounter rewards</p><h3 id="battle-progression-title">${title}</h3></div><strong class="battle-exp-earned" data-exp="${xpGained}">${xpGained?'+':''}${xpGained} EXP</strong></div>
-    ${recipient?`<div class="battle-exp-recipient"><div class="battle-reward-portrait">${portrait(recipient.speciesId,90)}</div><div class="battle-exp-copy"><p class="battle-progression-name">${esc(recipient.name)}</p><p class="battle-progression-level">${before.level!==after.level?`Lv. ${before.level} → Lv. ${after.level}`:`Lv. ${after.level}`}</p>${expProgressMarkup(after)}</div></div><p class="battle-exp-context">Awarded to your active Databeast.</p>`:`<p class="battle-no-exp">${outcome==='escape'?'Leaving an encounter awards no EXP.':'A defeat awards no EXP. Your team is rested for another try.'}</p>`}
+    ${recipient?`<div class="battle-exp-recipient"><div class="battle-reward-portrait">${portrait(recipient.speciesId,90)}</div><div class="battle-exp-copy"><p class="battle-progression-name">${esc(recipient.name)}</p><p class="battle-progression-level">${before.level!==after.level?`Lv. ${before.level} → Lv. ${after.level}`:`Lv. ${after.level}`}</p>${expProgressMarkup(after)}</div></div><p class="battle-exp-context">${modalData.tutorial?'Awarded to your first partner. The training Cloudfin has returned to Lyra.':'Awarded to your active Databeast.'}</p>`:`<p class="battle-no-exp">${outcome==='escape'?'Leaving an encounter awards no EXP.':'A defeat awards no EXP. Your team is rested for another try.'}</p>`}
     ${levelUps.length?`<div class="battle-level-ups" role="status" aria-live="polite">${levelUps.map(level=>levelUpMarkup(level,recipient)).join('')}</div>`:''}
   </section>`;
 }
@@ -720,7 +797,7 @@ function battleModal() {
   const moveCounts={}; history.forEach(m=>{ const name=typeof m==='string'?m:m.moveName||m.name||m.moveId||'an action'; moveCounts[name]=(moveCounts[name]||0)+1; });
   const summary=Object.entries(moveCounts).map(([name,count])=>`${name}: ${count}/${history.length} observed turns`).join(' · ');
   return modalShell(b.kind==='rival'?'Kai’s friendly challenge':'Wild Voltkit encounter',`TURN ${b.turn} · ${b.kind==='rival'?'LEARN TOGETHER':'A CHANCE TO BOND'}`,`
-    <div class="battle-stage">${battleCombatant(player,'player')}${battleCombatant(enemy,'enemy')}</div>
+    ${act1TutorialMarkup(state)}<div class="battle-stage">${battleCombatant(player,'player')}${battleCombatant(enemy,'enemy')}</div>
     ${battleTimeline(b.log||[])}
     <div class="battle-body">${battleActionMenu(player)}<details class="battle-help"><summary>Observation & bonding tips</summary><p class="battle-note">${b.scanned?`DataDex scan: ${summary?esc(summary)+'. ':''}Observed frequencies describe these turns. They do not guarantee the next move.`:'Your first scan is free. Observe behavior before choosing a strategy.'}${b.kind==='wild'?'<br>Bonding improves after a scan and at low HP. Avoid defeating it before using a crystal.':''}</p></details></div>`,{wide:true,battle:true});
 }
@@ -731,9 +808,10 @@ function dexModal() {
   let body;
   if (dexTab==='creatures') body=`<div class="dex-grid">${entries.map(([id,s])=>{const d=dexEntry(id);return `<div class="dex-card ${!d.seen?'locked':''}">${d.seen?portrait(id):'<div style="height:100px;display:grid;place-items:center;font:48px Georgia;color:#718b60">?</div>'}<h3>${d.seen?esc(s.name):'Undiscovered'}</h3><span class="pill">${d.recruited?'Bonded companion':d.seen?'Observed':'Not yet seen'}</span><p>${d.seen?esc(s.description||s.role||'A creature of Aetheria.'):'Explore habitats at different times to discover this creature.'}</p>${d.seen?`<p>${d.scans||0} scans recorded</p>`:''}</div>`;}).join('')}</div>`;
   else if (dexTab==='knowledge') {
-    const concepts=[{id:'concept_observation',name:'Learning from observations',text:'Records of rainfall, sightings, and battle actions help us evaluate claims. Evidence gives us a reason to update what we believe.'},{id:'concept_sampling_bias',name:'Sampling bias',text:'A population is the whole group we want to learn about. A sample is the part we observe. If our method systematically leaves out habitats or times, its conclusions may not represent the forest.'}];
+    const concepts=[{id:'concept_historical_observation',name:'Why do we keep records?',text:'Observations help us learn from past events. Records let people compare evidence, prepare for storms, and make better decisions. The original rainfall records disagree with the Archive copies. We still need to find out why.'},{id:'concept_observation',name:'Learning from observations',text:'Records of rainfall, sightings, and battle actions help us evaluate claims. Evidence gives us a reason to update what we believe.'},{id:'concept_sampling_bias',name:'Sampling bias',text:'A population is the whole group we want to learn about. A sample is the part we observe. If our method systematically leaves out habitats or times, its conclusions may not represent the forest.'}];
     body=concepts.map(c=>{const status=conceptStatus(c.id), stages=['unknown','encountered','understood','mastered'],index=stages.indexOf(status);return `<div class="concept-card"><h3>${c.name}<span class="pill">${esc(status)}</span></h3><p>${status==='unknown'?'An undiscovered idea. Keep observing and investigating.':c.text}</p><div class="knowledge-stages">${stages.map((s,i)=>`<span class="${i<=index?'reached':''}">${s}</span>`).join('')}</div></div>`;}).join('')+`<div class="evidence-note">A broader sample is an improvement, not a promise of certainty. A large sample can still be biased if collected using a narrow method.</div>${quest().status==='complete'?'<button class="secondary-button" data-action="mastery">Try the sampling mastery challenge</button>':''}`;
   } else body=`<p>${observations().length?'Your observations persist across visits, day and night, and saved games.':'Your field notebook is waiting. Meet Professor Inferra in the forest to begin.'}</p>${observations().map(o=>`<div class="settings-row"><div><strong>${esc(habitatName(o.habitatId))}</strong><p>${o.time==='day'?'☀ Daylight':'☾ Moonlight'} · ${esc((o.sightings||o.observations||[]).map?.(s=>`${creatureName(s.speciesId)} ×${s.count}`).join(', ')||'Recorded in the field')}</p></div><span class="pill">✓ Observed</span></div>`).join('')}<div class="modal-actions"><button class="secondary-button" data-action="investigation">Review investigation</button></div>`;
+  if (dexTab==='research' && !state.act1.migrated && state.act1.records.length) body=`<h3>Historical rainfall records</h3>${ACT1_RECORDS.filter(r=>state.act1.records.includes(r.id)).map(r=>`<div class="settings-row"><div><strong>${esc(r.title)}</strong><p>Cycle ${r.cycle} · Day ${r.day} · ${r.temperature}°C</p><p>Original: ${r.rainfall} mm · Archive copy: ${r.archiveRainfall} mm</p></div><span class="pill">${state.act1.compared.includes(r.id)?'✓ Compared':'Preserved'}</span></div>`).join('')}<details class="historical-context" ${preferences.learning==='scholar'?'open':''}><summary>Why earlier observers kept records</summary><p>Mara uses records to decide when to plant and protect crops. Bram compares river levels to prepare for floods. A shared village register lets the next generation learn from earlier storms. A disagreement calls for investigation; it does not establish who changed a record or why.</p></details><h3>Forest field notes</h3>`+body;
   return modalShell('The DataDex','OBSERVATIONS TODAY. DISCOVERIES FOR TOMORROW.',tabs+body,{wide:true});
 }
 
@@ -750,16 +828,39 @@ function exportSave() {
 $('modal-root').addEventListener('click',event=>{
   const button=event.target.closest('button[data-action]'); if (!button || button.disabled) return;
   const a=button.dataset.action;
-  if (activeDialogue && !isDialogueComplete(activeDialogue) && !['dialogue-next','dialogue-back','close','speech-toggle','speech-replay','speech-skip'].includes(a)) return;
-  if (a==='speech-toggle') speech.setEnabled(!speech.getState().enabled);
+  if (revealing && !['dialogue-next','dialogue-back','dialogue-reveal','close','speech-toggle','speech-replay','speech-skip'].includes(a)) {finishDialogueReveal();return;}
+  if (activeDialogue && !isDialogueComplete(activeDialogue) && !['dialogue-next','dialogue-back','dialogue-reveal','close','speech-toggle','speech-replay','speech-skip'].includes(a)) return;
+  if (a==='speech-toggle') {finishDialogueReveal();speech.setEnabled(!speech.getState().enabled);}
   else if (a==='speech-replay') speech.replay();
   else if (a==='speech-skip') {if (speech.getState().status === 'speaking') speech.skip();}
   else if (a==='dialogue-next') moveDialogue('next');
   else if (a==='dialogue-back') moveDialogue('back');
+  else if (a==='dialogue-reveal') finishDialogueReveal();
   else if (a==='dialogue-return') openModal(modalData.returnTo,{resumeDialogue:modalData.returnTo==='mastery'});
   else if (a==='close') closeModal();
-  else if (a==='begin') { const name=$('observer-name').value.trim()||'Observer'; if (dispatch({type:'SET_NAME',name},{quiet:true})) openModal('starters'); }
-  else if (a==='choose') { if(dispatch({type:'CHOOSE_STARTER',speciesId:button.dataset.id})){closeModal();chime('success');} }
+  else if (a==='begin') { const name=$('observer-name').value.trim()||'Observer'; if (dispatch({type:'SET_NAME',name},{quiet:true})) openModal(state.act1.migrated?'starters':'act1-intro'); }
+  else if (a==='choose') {
+    if (state.act1.migrated) {if(dispatch({type:'CHOOSE_STARTER',speciesId:button.dataset.id})){closeModal();chime('success');}}
+    else openModal('act1-starter-confirm',{id:button.dataset.id});
+  }
+  else if (a==='act1-confirm-starter') { if(dispatch({type:'CHOOSE_STARTER',speciesId:button.dataset.id})){closeModal();chime('success');} }
+  else if (a==='act1-intro-finish') {if(dispatch({type:'ACT1_INTRO_COMPLETE'},{quiet:true})){closeModal();goTo(currentTargets().find(t=>t.id==='lab'));}}
+  else if (a==='act1-start') {if(dispatch({type:'ACT1_START'}))closeModal();}
+  else if (a==='act1-field') {if(dispatch({type:'ACT1_FIELD_ACTION',id:button.dataset.id}))renderModal();}
+  else if (a==='act1-collect') {if(dispatch({type:'ACT1_COLLECT_RECORD',id:button.dataset.id})){chime('success');renderModal();}}
+  else if (a==='act1-compare') {if(dispatch({type:'ACT1_COMPARE_RECORD',id:button.dataset.id}))renderModal();}
+  else if (a==='act1-compare-finish') {if(dispatch({type:'ACT1_COMPLETE_COMPARISON'}))openModal('act1-discovery');}
+  else if (a==='act1-discovery') openModal('act1-discovery');
+  else if (a==='act1-receive-dex') {if(dispatch({type:'ACT1_RECEIVE_DEX'})){dexTab='knowledge';openModal('dex');chime('success');}}
+  else if (a==='act1-demo-open') openModal('act1-demo',{id:button.dataset.id});
+  else if (a==='act1-demo-finish') {if(dispatch({type:'ACT1_DEMO',id:button.dataset.id})){openModal('act1-bond',{resumeDialogue:true});chime('success');}}
+  else if (a==='act1-starters') openModal('starters');
+  else if (a==='act1-buy') dispatch({type:'BUY_ITEM',id:button.dataset.id});
+  else if (a==='act1-side-action') {if(dispatch({type:'ACT1_SIDE_ACTION',id:button.dataset.id})){renderModal();chime('success');}}
+  else if (a==='act1-council-finish') {if(dispatch({type:'ACT1_COUNCIL_COMPLETE'})){openModal('act1-completion');chime('success');}}
+  else if (a==='act1-completion') openModal('act1-completion');
+  else if (a==='act1-replay-intro') openModal('act1-intro');
+  else if (a==='act1-depart') {closeModal();goTo(currentTargets().find(t=>t.id==='gate'));}
   else if (a==='start-battle') { if(dispatch({type:'START_BATTLE',kind:button.dataset.kind},{quiet:true}))openModal('battle'); }
   else if (battleCommandButtons.has(a)) selectBattleAction(button,event.detail>0);
   else if (a==='battle-confirm') confirmBattleAction();
@@ -835,6 +936,17 @@ document.addEventListener('input',event=>{
   music.setVolume(Number(event.target.value)/100);
   if (music.getState().enabled&&music.getState().volume>0) void music.unlock();
 });
+document.addEventListener('change',event=>{
+  const key=event.target.dataset.preference;
+  if (!key) return;
+  if (key==='combatDifficulty') dispatch({type:'SET_COMBAT_DIFFICULTY',difficulty:event.target.value});
+  else {
+    preferences=setPreference(preferences,key,event.target.value,storage);
+    document.body.classList.toggle('large-text',preferences.textSize==='large');
+    if (preferences.dialogueSpeed==='instant') finishDialogueReveal();
+    updateUI();
+  }
+});
 function unlockMusicFromGesture(event) {
   if (!event.isTrusted||event.repeat||event.ctrlKey||event.metaKey||event.altKey||event.target?.closest?.('[data-music-control]')) return;
   if (!music.getState().enabled||music.getState().volume===0) return;
@@ -886,7 +998,7 @@ document.addEventListener('keydown',event=>{
     }
     if(event.key==='Escape'){event.preventDefault();closeModal();}
     if(event.key==='Tab'){
-      const items=[...$('modal-root').querySelectorAll('button:not(:disabled),input:not(:disabled),summary,[tabindex="0"]')].filter(element=>element.getClientRects().length>0);
+      const items=[...$('modal-root').querySelectorAll('button:not(:disabled),input:not(:disabled),select:not(:disabled),summary,[tabindex="0"]')].filter(element=>element.getClientRects().length>0);
       const first=items[0],last=items[items.length-1];
       if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus();}
       else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus();}
@@ -896,11 +1008,13 @@ document.addEventListener('keydown',event=>{
   }
   if(/INPUT|TEXTAREA|SELECT/.test(event.target.tagName)||event.ctrlKey||event.metaKey||event.altKey)return;
   if(event.target.closest('button,a')&&['Enter',' '].includes(event.key))return;
-  const direction=({ArrowUp:'up',w:'up',W:'up',ArrowDown:'down',s:'down',S:'down',ArrowLeft:'left',a:'left',A:'left',ArrowRight:'right',d:'right',D:'right'})[event.key];
+  const letters=preferences.movement==='ijkl'?{i:'up',k:'down',j:'left',l:'right'}:{w:'up',s:'down',a:'left',d:'right'};
+  const direction=({ArrowUp:'up',ArrowDown:'down',ArrowLeft:'left',ArrowRight:'right'})[event.key]||letters[event.key.toLowerCase()];
   if(direction){event.preventDefault();path=[];pathTarget=null;if(performance.now()-lastStep>=85){step(direction);lastStep=performance.now();}}
   else if(event.key==='e'||event.key==='E'||event.key===' '){event.preventDefault();interact();}
   else if(event.key==='p'||event.key==='P'){event.preventDefault();openModal('save');}
   else if(event.key==='x'||event.key==='X'){event.preventDefault();openModal('dex');}
+  else if(event.key.toLowerCase()==='q'||event.key.toLowerCase()==='j'&&preferences.movement!=='ijkl'){event.preventDefault();openModal('journal');}
 });
 document.addEventListener('keyup',event=>{heldDialogueKeys.delete(event.key.toLowerCase());heldBattleKeys.delete(event.key);});
 window.addEventListener('blur',()=>{heldDialogueKeys.clear();heldBattleKeys.clear();});
@@ -919,15 +1033,47 @@ $('time-button').addEventListener('click',()=>{
 });
 document.querySelectorAll('[data-walk]').forEach(button=>button.addEventListener('click',()=>{path=[];pathTarget=null;step(button.dataset.walk);}));
 $('sound-button').addEventListener('click',()=>{sound=!sound;$('sound-button').textContent=sound?'Effects on':'Effects off';$('sound-button').setAttribute('aria-pressed',String(sound));chime('success');});
-$('speech-toggle-button').addEventListener('click',()=>speech.setEnabled(!speech.getState().enabled));
+$('speech-toggle-button').addEventListener('click',()=>{finishDialogueReveal();speech.setEnabled(!speech.getState().enabled);});
 document.addEventListener('visibilitychange',()=>{if(document.hidden) speech.skip();music.setHidden(document.hidden);});
 window.addEventListener('pagehide',()=>{speech.skip();music.setHidden(true);});
 window.addEventListener('pageshow',()=>music.setHidden(document.hidden));
 
+let padHeld=new Set(),padStep=0;
+function pollGamepad(now) {
+  let gamepad;
+  try {gamepad=Array.from(navigator.getGamepads?.()||[]).find(pad=>pad?.mapping==='standard');} catch {return;}
+  if (!gamepad) {padHeld.clear();return;}
+  const pressed=new Set(gamepad.buttons.flatMap((button,index)=>button.pressed?[index]:[]));
+  const fresh=index=>pressed.has(index)&&!padHeld.has(index);
+  if (fresh(1)&&modal) closeModal();
+  else if (fresh(9)&&!state.battle) openModal('journal');
+  else if (fresh(0)) {
+    if (!modal) interact();
+    else if (activeDialogue&&!isDialogueComplete(activeDialogue)) moveDialogue('next');
+    else document.activeElement?.closest('#modal-root button:not(:disabled)')?.click();
+  }
+  if (!modal&&now-padStep>140) {
+    const [horizontal=0,vertical=0]=gamepad.axes;
+    const direction=pressed.has(12)||vertical<-.5?'up':pressed.has(13)||vertical>.5?'down':pressed.has(14)||horizontal<-.5?'left':pressed.has(15)||horizontal>.5?'right':null;
+    if (direction) {path=[];pathTarget=null;step(direction);padStep=now;}
+  }
+  // With a dialog open, D-pad presses move keyboard focus through its controls.
+  if (modal&&[12,13,14,15].some(fresh)) {
+    const controls=[...$('modal-root').querySelectorAll('button:not(:disabled),input,select,summary')].filter(element=>element.getClientRects().length);
+    const previous=fresh(12)||fresh(14),index=controls.indexOf(document.activeElement);
+    controls[(index+(previous?-1:1)+controls.length)%controls.length]?.focus({preventScroll:true});
+  }
+  padHeld=pressed;
+}
+
 function frame(now){
+  if (!document.hidden) pollGamepad(now);
   if(!document.hidden&&now-lastDraw>(reducedMotion?250:70)){
     if(path.length&&!modal&&now-lastStep>110){const point=path.shift();const dx=point.x-state.player.x,dy=point.y-state.player.y;step(dx>0?'right':dx<0?'left':dy>0?'down':'up');lastStep=now;if(!path.length&&pathTarget){const target=pathTarget;pathTarget=null;interact(target);}}
-    renderWorld($('world'),state,{selectedTarget:pathTarget?.id,reduceMotion:reducedMotion});lastDraw=now;
+    const scene=modal==='act1-intro'?(activeDialogue.index===0?'calm':activeDialogue.index<3?'storm':'aftermath'):'aftermath';
+    renderWorld($('world'),{...state,act1Scene:scene},{selectedTarget:pathTarget?.id,reduceMotion:reducedMotion});
+    if ($('intro-world')) renderWorld($('intro-world'),{...state,map:'village',act1Scene:scene},{reduceMotion:reducedMotion});
+    lastDraw=now;
   }
   requestAnimationFrame(frame);
 }
@@ -935,7 +1081,7 @@ function frame(now){
 updateSpeechControls();
 updateUI();
 if(state.battle)openModal('battle');
-else if(!state.starter&&!resumed)openModal('welcome');
+else if(!state.starter&&(!resumed||state.act1.migrated&&!state.flags.introSeen))openModal('welcome');
 else if(resumed)toast('Welcome back, '+state.player.name+'. Your journey has been restored.');
 if(unreadableSave)toast('The browser save could not be read. You can import a backup in Save & load.');
 if(!savingAvailable)$('save-status').textContent='Automatic saving unavailable · Export a save in Save & load';

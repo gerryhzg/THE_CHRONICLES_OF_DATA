@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { SPEAKERS, resolveSpeaker, portraitMarkup } from '../dist/portraits.js';
 
-const expectedIds = ['lyra', 'kai', 'inferra', 'rowan', 'ranger', 'observer', 'narrator'];
+const expectedIds = ['lyra', 'kai', 'inferra', 'rowan', 'ranger', 'observer', 'narrator',
+  'mara', 'orin', 'nell', 'bram', 'elin', 'tomas', 'child'];
 // Compare the painted shapes, excluding accessibility labels that also change.
 const paintedArt = svg => svg.match(/<g\b[^>]*>([\s\S]*)<\/g>/)?.[1];
 

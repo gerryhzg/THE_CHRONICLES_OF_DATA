@@ -15,6 +15,7 @@ export function getBattleActions(state) {
   const species = SPECIES[member.speciesId];
   const enemyName = SPECIES[battle.enemy.speciesId].name;
   const missingHp = member.maxHp - member.hp;
+  const practicePotion = !state.act1?.migrated && battle.kind === 'rival' && !state.flags.rivalDefeated;
   const moves = species.moves.map(move => {
     const healing = Math.min(move.power, missingHp);
     const focus = Math.min(move.power, 8 - member.focus + move.cost);
@@ -65,10 +66,10 @@ export function getBattleActions(state) {
       key: 'potion', group: 'commands', label: 'Potion', category: 'Item',
       description: 'Use a potion on your active Databeast.',
       effect: `Restore ${Math.min(30, missingHp)} HP to your ${species.name} (up to 30 HP).`,
-      cost: `1 Potion · ${state.inventory.potions} left`, turn: TURN,
+      cost: practicePotion ? 'Lyra supplies a practice potion' : `1 Potion · ${state.inventory.potions} left`, turn: TURN,
       limitation: `Healing stops at ${member.maxHp} HP. Visit the sanctuary to restock.`,
       action: { type: 'BATTLE_POTION' },
-    }, state.inventory.potions === 0
+    }, state.inventory.potions === 0 && !practicePotion
       ? 'No potions left. Restock at the sanctuary.'
       : missingHp === 0 ? `${species.name} already has full HP.` : ''),
     descriptor({

@@ -1,6 +1,7 @@
+import { createLegacyGame as createGame } from './fixtures.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { SPECIES, act, createGame } from '../dist/engine.js';
+import { SPECIES, act } from '../dist/engine.js';
 import { getBattleActions } from '../dist/battle-actions.js';
 
 function battleFor(speciesId = 'creature_statifox', kind = 'rival') {

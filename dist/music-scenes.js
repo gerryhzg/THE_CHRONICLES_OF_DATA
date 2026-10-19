@@ -13,7 +13,10 @@ export function getMusicScene(state, { modal = null, modalData = {} } = {}) {
     return modalData.won || modalData.recruited ? 'celebration' : base;
   }
 
-  if (modal === 'complete' || modal === 'report-complete') return 'celebration';
+  if (modal === 'complete' || modal === 'report-complete' || modal === 'act1-completion' || modal === 'act1-starter-confirm') return 'celebration';
+  if (modal==='act1-intro') return modalData.introStorm?'mystery':'village';
+  if (['act1-tower','act1-discovery'].includes(modal)) return 'mystery';
+  if (['act1-home','act1-sanctuary'].includes(modal)) return 'rest';
   if (modal === 'sanctuary' || modal === 'camp') return 'rest';
 
   const conversation = modal === 'dialogue' ? modalData.conversationId : modal;

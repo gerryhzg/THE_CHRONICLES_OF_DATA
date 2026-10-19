@@ -18,20 +18,31 @@ const edges = set => {
 };
 edges(villageBlocked);
 edges(forestBlocked);
+// One connected village: northern road, central square, farms, and a river shore.
 fill(villagePaths, 2, 14, 29, 3);
-fill(villagePaths, 15, 5, 3, 15);
+fill(villagePaths, 15, 1, 3, 20);
 fill(villagePaths, 10, 8, 18, 3);
 fill(villagePaths, 11, 7, 3, 3);
 fill(villagePaths, 26, 12, 3, 4);
 fill(villagePaths, 5, 12, 3, 4);
+fill(villagePaths, 2, 8, 10, 2);
+fill(villagePaths, 9, 10, 9, 4);
+fill(villagePaths, 9, 17, 21, 1);
+fill(villagePaths, 9, 18, 4, 2);
+fill(villagePaths, 27, 18, 3, 2);
+fill(villagePaths, 12, 20, 8, 1);
 fill(villageBlocked, 3, 10, 6, 4);
 fill(villageBlocked, 18, 3, 6, 6);
 fill(villageBlocked, 25, 10, 5, 4);
 fill(villageBlocked, 11, 3, 3, 5);
 fill(villageBlocked, 4, 3, 4, 5);
-for (let y = 2; y <= 7; y++) {
-  for (let x = 25; x <= 30; x++) {
-    if ((y === 2 || y === 7) && (x === 25 || x === 30)) continue;
+fill(villageBlocked, 2, 2, 3, 2);
+fill(villageBlocked, 25, 2, 4, 3);
+fill(villageBlocked, 19, 14, 4, 3);
+for (let y = 18; y <= 19; y++) {
+  for (let x = 1; x <= 30; x++) {
+    // The old bridge and two wooden docks are safe, walkable crossings.
+    if ((x >= 9 && x <= 12) || (x >= 15 && x <= 17) || (x >= 27 && x <= 29)) continue;
     villageWater.add(key(x, y)); villageBlocked.add(key(x, y));
   }
 }
@@ -53,8 +64,8 @@ for (let y = 0; y < H; y++) {
 }
 
 const villageTrees = [
-  [1, 1], [10, 1], [15, 1], [23, 1], [30, 1], [1, 7], [30, 9],
-  [1, 12], [1, 19], [11, 20], [19, 20], [22, 18], [29, 20], [30, 18],
+  [1, 1], [9, 1], [13, 1], [20, 1], [23, 1], [30, 1], [1, 7], [30, 9],
+  [1, 12], [1, 17], [3, 20], [7, 20], [22, 20], [26, 20], [30, 16],
 ];
 const forestTrees = [
   [1, 1], [4, 1], [7, 1], [10, 1], [13, 1], [16, 1], [19, 1], [22, 1], [28, 1], [30, 2],
@@ -69,13 +80,23 @@ export const MAPS = {
   village: {
     name: 'Harvest Village', width: W, height: H, spawn: { x: 16, y: 15 },
     interactables: [
-      { id: 'lab', name: "Lyra's Lab", x: 20, y: 9, type: 'starter', hitbox: { x: 18, y: 2, width: 6, height: 7 } },
-      { id: 'kai', name: 'Kai', x: 17, y: 13, type: 'battle' },
-      { id: 'sanctuary', name: 'Sanctuary', x: 27, y: 14, type: 'heal', hitbox: { x: 25, y: 9, width: 5, height: 5 } },
-      { id: 'tower', name: 'Weather Tower', x: 12, y: 8, type: 'story', hitbox: { x: 10, y: 2, width: 5, height: 7 } },
-      { id: 'gate', name: 'Twin Scholars’ Forest', x: 29, y: 15, type: 'travel', hitbox: { x: 28, y: 14, width: 3, height: 4 } },
-      { id: 'home', name: 'Your Home', x: 6, y: 14, type: 'save', hitbox: { x: 3, y: 9, width: 6, height: 5 } },
-      { id: 'sign', name: 'Village Noticeboard', x: 13, y: 16, type: 'help' },
+      { id: 'lab', name: "Lyra's Lab", zone: 'Research Lab', x: 20, y: 9, type: 'starter', hitbox: { x: 18, y: 2, width: 6, height: 7 } },
+      { id: 'kai', name: 'Kai', zone: 'Training Courtyard', x: 17, y: 13, type: 'battle' },
+      { id: 'sanctuary', name: 'Sanctuary', zone: 'Research Sanctuary', x: 27, y: 14, type: 'heal', hitbox: { x: 25, y: 9, width: 5, height: 5 } },
+      { id: 'tower', name: 'Weather Tower', zone: 'Weather Tower', x: 12, y: 8, type: 'story', hitbox: { x: 10, y: 2, width: 5, height: 7 } },
+      { id: 'gate', name: 'Twin Scholars’ Forest', zone: 'Northern Gate', x: 16, y: 2, type: 'travel', hitbox: { x: 15, y: 1, width: 3, height: 3 } },
+      { id: 'home', name: 'Your Home', zone: 'Your Home', x: 6, y: 14, type: 'save', hitbox: { x: 3, y: 10, width: 6, height: 4 } },
+      { id: 'sign', name: 'Oracle Forecast Board', zone: 'Town Square', x: 13, y: 16, type: 'help', hitbox: { x: 12, y: 14, width: 3, height: 3 } },
+      { id: 'farm', name: 'Farmer Mara', zone: 'Farm Fields', x: 4, y: 9, type: 'record', hitbox: { x: 2, y: 8, width: 5, height: 2 } },
+      { id: 'river', name: 'Bram’s River Reeds', zone: 'River and Old Bridge', x: 10, y: 18, type: 'record', hitbox: { x: 9, y: 18, width: 3, height: 1 } },
+      { id: 'shop', name: 'Nell’s General Store', zone: 'Shops', x: 21, y: 17, type: 'shop', hitbox: { x: 19, y: 14, width: 4, height: 3 } },
+      { id: 'rowan', name: 'Elder Rowan', zone: 'Town Square', x: 15, y: 12, type: 'council' },
+      { id: 'scarf', name: 'Lost Scarf', zone: 'Fishing Dock', x: 12, y: 19, type: 'optional' },
+      { id: 'observer', name: 'Old Observer’s Journal', zone: 'Residential Area', x: 3, y: 15, type: 'optional' },
+      { id: 'supply', name: 'Hidden Supply Chest', zone: 'Eastern Riverbank', x: 28, y: 19, type: 'optional', hitbox: { x: 27, y: 18, width: 3, height: 2 } },
+      { id: 'garden', name: 'Storm-damaged Garden', zone: 'Sanctuary Garden', x: 24, y: 17, type: 'optional' },
+      { id: 'wild', name: 'Village Voltkit', zone: 'Northern Meadow', x: 28, y: 8, type: 'recruit' },
+      { id: 'child', name: 'Mina’s Missing Scarf', zone: 'Town Square', x: 10, y: 13, type: 'optional' },
     ],
     blocked: [...villageBlocked].map(v => { const [x, y] = v.split(',').map(Number); return { x, y }; }),
   },
@@ -97,6 +118,15 @@ export const MAPS = {
 export function isWalkable(mapId, x, y) {
   const blocked = mapId === 'forest' ? forestBlocked : villageBlocked;
   return Number.isInteger(x) && Number.isInteger(y) && x >= 0 && y >= 0 && x < W && y < H && !blocked.has(key(x, y));
+}
+
+export function restoreMapPosition(state) {
+  const map=MAPS[state.map];
+  if (map&&isWalkable(state.map,state.player.x,state.player.y)) return state;
+  // Old village paths now contain the river and new buildings. Preserve the
+  // adventure, including an unfinished encounter, by using a safe arrival tile.
+  if (map&&state.act1?.migrated) return {...state,player:{...state.player,...map.spawn}};
+  throw new Error('The saved player position is outside the walkable map.');
 }
 
 const hash = (x, y, n = 0) => {
@@ -268,7 +298,8 @@ function tower(ctx) {
 function person(ctx, tx, ty, kind = 'player', facing = 'down', t = 0) {
   const x = tx * TILE + 12, y = ty * TILE + 18;
   const isPlayer = kind === 'player';
-  const shirt = isPlayer ? '#456d75' : kind === 'kai' ? '#9b5650' : kind === 'inferra' ? '#dbcfb0' : '#bbbeaa';
+  const clothes = { kai: '#9b5650', inferra: '#dbcfb0', lyra: '#bbbeaa', mara: '#b58d53', bram: '#709394', nell: '#a36e83', rowan: '#7f729d', orin: '#a19270', elin: '#b7bf9b', tomas: '#7d8d91', child: '#cf9c71', villager: '#859a7b' };
+  const shirt = isPlayer ? '#456d75' : clothes[kind] ?? '#bbbeaa';
   const pants = isPlayer ? '#384c55' : '#536154';
   ellipse(ctx, 'rgba(35,46,36,.28)', x, y + 1, 9, 4);
   rect(ctx, '#313d39', x - 6, y - 2, 4, 4); rect(ctx, '#313d39', x + 2, y - 2, 4, 4);
@@ -290,10 +321,123 @@ function person(ctx, tx, ty, kind = 'player', facing = 'down', t = 0) {
   } else if (kind === 'kai') {
     rect(ctx, '#463b3d', x - 7, y - 36, 14, 6); rect(ctx, '#463b3d', x - 9, y - 33, 6, 5); rect(ctx, '#e5b667', x - 2, y - 36, 7, 3);
     rect(ctx, '#d8bb74', x - 5, y - 21, 10, 3);
+  } else if (['mara', 'bram', 'nell', 'child', 'villager'].includes(kind)) {
+    rect(ctx, kind === 'nell' ? '#684b48' : '#785b40', x - 7, y - 36, 14, 7);
+    if (kind === 'mara' || kind === 'bram') {
+      rect(ctx, '#d1ba80', x - 6, y - 39, 12, 6); rect(ctx, '#a78d5a', x - 10, y - 33, 20, 3);
+    }
+    if (kind === 'nell' || kind === 'mara') rect(ctx, '#e7d8b3', x - 4, y - 15, 8, 8);
+    if (kind === 'bram') { rect(ctx, '#725d45', x + 9, y - 29, 2, 31); rect(ctx, '#d4cdaa', x + 11, y - 29, 16, 1); }
+    if (kind === 'child') { rect(ctx, '#d6ac69', x - 7, y - 33, 14, 3); rect(ctx, '#b57656', x - 5, y - 20, 10, 3); }
+  } else if (kind === 'tomas') {
+    rect(ctx, '#5e7075', x - 7, y - 37, 14, 9); rect(ctx, '#bac4bd', x - 7, y - 31, 14, 3);
+    rect(ctx, '#c6cbb9', x - 6, y - 20, 12, 7); rect(ctx, '#786447', x + 10, y - 35, 2, 37);
+    poly(ctx, '#d1d0b4', [[x + 9, y - 35], [x + 11, y - 42], [x + 14, y - 35]]);
   } else {
     rect(ctx, kind === 'inferra' ? '#584d42' : '#acae92', x - 7, y - 36, 14, 7); rect(ctx, '#d2d8ca', x - 8, y - 30, 16, 2);
     rect(ctx, '#5c7070', x - 5, y - 29, 4, 4); rect(ctx, '#5c7070', x + 1, y - 29, 4, 4); rect(ctx, '#486567', x - 1, y - 28, 2, 1);
     rect(ctx, '#769795', x - 1, y - 20, 2, 10); rect(ctx, '#7c866e', x + 7, y - 16, 5, 7);
+  }
+}
+
+function crate(ctx, tx, ty, { open = false, paper = false } = {}) {
+  const x = tx * TILE + 1, y = ty * TILE + 2;
+  ellipse(ctx, 'rgba(44,47,29,.2)', x + 11, y + 18, 14, 5);
+  rect(ctx, '#775b3e', x, y - 4, 23, 22); rect(ctx, '#b58a57', x + 2, y - 2, 19, 18);
+  for (let i = 0; i < 3; i++) rect(ctx, '#806544', x + 3, y + i * 6, 17, 1);
+  rect(ctx, '#cfaa73', x + 3, y - 2, 3, 18); rect(ctx, '#cfaa73', x + 17, y - 2, 3, 18);
+  if (open) { rect(ctx, '#514b38', x + 3, y - 2, 17, 8); rect(ctx, '#d3b37f', x - 3, y - 7, 25, 4); }
+  if (paper) {
+    rect(ctx, '#eee0b6', x + 7, y + 2, 11, 13); rect(ctx, '#a59b76', x + 9, y + 4, 6, 1); rect(ctx, '#a59b76', x + 9, y + 7, 6, 1);
+    rect(ctx, '#769b9c', x + 11, y + 10, 4, 3);
+  }
+}
+
+function villageBridge(ctx) {
+  // Vertical bridge lines up with the three walkable crossing columns.
+  const x = 15 * TILE, y = 17 * TILE + 12;
+  rect(ctx, '#65563e', x - 4, y, 3 * TILE + 8, 3 * TILE);
+  rect(ctx, '#b39b6c', x, y, 3 * TILE, 3 * TILE);
+  for (let yy = y + 2; yy < y + 3 * TILE; yy += 8) { rect(ctx, '#756246', x, yy, 3 * TILE, 2); rect(ctx, '#c9b181', x + 3, yy + 2, 3 * TILE - 6, 2); }
+  for (const xx of [x - 5, x + 3 * TILE + 1]) {
+    rect(ctx, '#7c6646', xx, y - 4, 4, 3 * TILE + 7);
+    for (let yy = y - 4; yy < y + 3 * TILE + 6; yy += 22) { rect(ctx, '#69543b', xx - 2, yy - 5, 7, 14); rect(ctx, '#d4b985', xx - 2, yy - 6, 7, 3); }
+  }
+  for (const [dx, dw] of [[9, 4], [27, 3]]) {
+    const dockX = dx * TILE;
+    rect(ctx, '#725f44', dockX, 18 * TILE, dw * TILE, 2 * TILE);
+    rect(ctx, '#b39b70', dockX + 2, 18 * TILE + 2, dw * TILE - 4, 2 * TILE - 4);
+    for (let yy = 18 * TILE + 5; yy < 20 * TILE; yy += 8) rect(ctx, '#846f4f', dockX + 2, yy, dw * TILE - 4, 2);
+    for (const xx of [dockX, dockX + dw * TILE - 5]) { rect(ctx, '#6a543d', xx, 20 * TILE - 10, 5, 14); rect(ctx, '#d3bd8a', xx, 20 * TILE - 12, 5, 3); }
+  }
+}
+
+function reeds(ctx, tx, ty, t, paper = false) {
+  const x = tx * TILE + 12, y = ty * TILE + 17;
+  for (let i = 0; i < 6; i++) {
+    const xx = x - 13 + i * 5, sway = Math.round(Math.sin(t / 1300 + i) * 2);
+    rect(ctx, '#446f50', xx, y - 20, 2, 23);
+    poly(ctx, '#81954f', [[xx, y - 5], [xx - 5 + sway, y - 18], [xx + 2, y - 12]]);
+    rect(ctx, '#9a7d4f', xx + sway, y - 25 - i % 3, 3, 8);
+  }
+  if (paper) { rect(ctx, '#dfdec1', x + 2, y - 1, 12, 9); rect(ctx, '#85a4a0', x + 4, y + 2, 8, 1); rect(ctx, '#85a4a0', x + 4, y + 5, 5, 1); }
+}
+
+function northGate(ctx, open) {
+  const x = 16 * TILE + 12, y = 2 * TILE + 9;
+  for (const xx of [x - 43, x + 35]) {
+    rect(ctx, '#5f6653', xx, y - 30, 10, 44); rect(ctx, '#b8b597', xx + 2, y - 28, 6, 39);
+    rect(ctx, '#6d715d', xx - 3, y - 34, 16, 7); rect(ctx, '#d4c6a1', xx - 2, y - 35, 14, 3);
+  }
+  rect(ctx, '#6b6248', x - 43, y - 30, 88, 6); rect(ctx, '#c4ac77', x - 41, y - 29, 84, 2);
+  if (!open) {
+    for (let xx = x - 30; xx <= x + 29; xx += 9) rect(ctx, '#806a48', xx, y - 23, 5, 30);
+    rect(ctx, '#bba16b', x - 31, y - 16, 66, 4); rect(ctx, '#bba16b', x - 31, y - 2, 66, 4);
+    rect(ctx, '#c4b785', x - 4, y - 6, 9, 8); rect(ctx, '#4f6158', x - 1, y - 4, 3, 4);
+  } else {
+    rect(ctx, '#9e8961', x - 37, y - 22, 5, 27); rect(ctx, '#9e8961', x + 29, y - 22, 5, 27);
+    poly(ctx, '#ded3aa', [[x - 7, y - 10], [x, y - 18], [x + 7, y - 10], [x + 2, y - 10], [x + 2, y + 1], [x - 2, y + 1], [x - 2, y - 10]]);
+  }
+}
+
+function oracleBoard(ctx, scene, t, reduceMotion) {
+  const x = 13 * TILE + 12, y = 16 * TILE + 9;
+  rect(ctx, '#68543c', x - 39, y - 9, 6, 19); rect(ctx, '#68543c', x + 34, y - 9, 6, 19);
+  rect(ctx, '#5e685e', x - 47, y - 67, 95, 61); rect(ctx, '#b8b6a0', x - 45, y - 65, 91, 4);
+  rect(ctx, '#294e52', x - 42, y - 59, 85, 48); rect(ctx, '#63837b', x - 40, y - 57, 81, 1);
+  const calm = scene === 'calm';
+  ctx.save(); ctx.font = '700 7px ui-monospace, Consolas, monospace'; ctx.textAlign = 'center';
+  ctx.fillStyle = '#d5e4c6'; ctx.fillText('GRAND ARCHIVE', x, y - 47);
+  ctx.font = '6px ui-monospace, Consolas, monospace'; ctx.fillStyle = '#b9d2c4';
+  ctx.fillText('DAY 127 · FORECAST 0 mm', x, y - 36);
+  ctx.fillStyle = calm ? '#d8d7a1' : '#f0c18b'; ctx.fillText(calm ? 'DROUGHT CONTINUES' : 'MEASURED 46 mm', x, y - 26);
+  ctx.fillStyle = calm ? '#afc9ab' : (reduceMotion || Math.sin(t / 450) > -.3 ? '#f3a093' : '#c97670');
+  ctx.fillText(calm ? 'CONFIDENCE: ABSOLUTE' : 'PREDICTIONS: PERFECT', x, y - 16); ctx.restore();
+}
+
+function aftermath(ctx, scene) {
+  if (scene === 'calm') return;
+  for (const [x, y, w, h] of [[2, 8, 32, 8], [7, 9, 30, 7], [10, 11, 28, 9], [14, 10, 38, 10], [18, 12, 26, 8], [23, 9, 31, 9], [5, 15, 26, 8], [26, 16, 29, 9], [2, 5, 20, 9]]) {
+    const px = x * TILE, py = y * TILE + 11;
+    ellipse(ctx, '#8d8a60', px + 3, py + 2, w / 2 + 3, h / 2 + 2);
+    ellipse(ctx, '#7aaba4', px + 3, py, w / 2, h / 2); rect(ctx, '#b4c6ad', px - w / 4, py - 2, w / 3, 2);
+  }
+  for (let i = 0; i < 12; i++) {
+    const x = 155 + i * 11, y = 246 + Math.sin(i * .6) * 8;
+    ellipse(ctx, '#968d66', x, y, 3, 2); ellipse(ctx, '#968d66', x + 4, y + 6, 2, 3);
+  }
+  // A washed-out crop row, fallen basket, and floating timber show the damage.
+  rect(ctx, '#827b4f', 25, 139, 58, 10); rect(ctx, '#79a59b', 28, 142, 49, 4);
+  poly(ctx, '#9b764d', [[204, 211], [218, 216], [215, 229], [200, 225]]);
+  rect(ctx, '#d2b67d', 202, 214, 15, 3); rect(ctx, '#cf9f63', 121, 443, 27, 5); rect(ctx, '#a17c51', 122, 446, 24, 2);
+}
+
+function storm(ctx, t, reduceMotion) {
+  rect(ctx, 'rgba(26,43,62,.29)', 0, 0, W * TILE, H * TILE);
+  for (let i = 0; i < 80; i++) {
+    const x = (hash(i, 150) * 900 + (reduceMotion ? 0 : t * .12)) % 840 - 36;
+    const y = (hash(i, 151) * 700 + (reduceMotion ? 0 : t * .36)) % 600 - 40;
+    poly(ctx, 'rgba(192,220,221,.52)', [[x, y], [x + 2, y], [x - 5, y + 15], [x - 7, y + 15]]);
   }
 }
 
@@ -378,6 +522,10 @@ export function renderWorld(canvas, state, { selectedTarget, reduceMotion = fals
   const mapId = state.map === 'forest' ? 'forest' : 'village';
   const forest = mapId === 'forest', night = state.time === 'night';
   const t = reduceMotion ? 1200 : state.timestamp ?? (typeof performance !== 'undefined' ? performance.now() : Date.now());
+  const scene = state.act1Scene ?? 'aftermath';
+  const act1 = state.act1 ?? {}, side = act1.side ?? {}, field = act1.fieldSteps ?? {};
+  const records = act1.records ?? [];
+  const gateOpen = !!(act1.councilComplete || ((!state.act1 || act1.migrated) && state.flags?.rivalDefeated));
   const selected = typeof selectedTarget === 'object' ? selectedTarget?.id : selectedTarget;
   const target = MAPS[mapId].interactables.find(v => v.id === selected);
   grass(ctx, forest); paths(ctx, forest ? forestPaths : villagePaths, forest);
@@ -386,28 +534,74 @@ export function renderWorld(canvas, state, { selectedTarget, reduceMotion = fals
   const add = (y, draw) => things.push({ y, draw });
 
   if (!forest) {
-    wheat(ctx, 24, 49, 64, 157); wheat(ctx, 24, 433, 205, 65);
-    for (let i = 0; i < 23; i++) flowers(ctx, 440 + Math.floor(hash(i, 12) * 240), 432 + Math.floor(hash(i, 17) * 56), ['#ead3a0', '#cfa0a0', '#b5c48b'][i % 3]);
-    for (let i = 0; i < 8; i++) {
-      const x = 610 + i * 15;
-      rect(ctx, '#497b59', x, 188, 2, 13); rect(ctx, '#648b5d', x + 2, 184, 2, 15);
+    wheat(ctx, 24, 49, 64, 157); wheat(ctx, 194, 64, 51, 115);
+    wheat(ctx, 25, 208, 47, 22);
+    // A cobbled meeting square and a chalk training ring give the hub its shape.
+    ellipse(ctx, '#a79c70', 348, 289, 109, 63); ellipse(ctx, '#c1b58a', 348, 286, 104, 57);
+    for (let i = 0; i < 50; i++) {
+      const x = 252 + hash(i, 96) * 190, y = 251 + hash(i, 97) * 69;
+      rect(ctx, '#aa9e79', x, y, 5, 2);
     }
+    ellipse(ctx, '#9b9b6a', 457, 302, 61, 29); ellipse(ctx, '#c5ba8b', 457, 299, 57, 25);
+    ellipse(ctx, '#ddd4a6', 457, 299, 35, 17); ellipse(ctx, '#b8af82', 457, 299, 32, 15);
+    for (let i = 0; i < 22; i++) flowers(ctx, 603 + Math.floor(hash(i, 12) * 112), 364 + Math.floor(hash(i, 17) * 46), ['#ead3a0', '#cfa0a0', '#b5c48b'][i % 3]);
+    aftermath(ctx, scene);
+    villageBridge(ctx);
+    for (let i = 0; i < 6; i++) reeds(ctx, 3 + i, 18, t);
+    for (let i = 0; i < 5; i++) reeds(ctx, 21 + i, 19, t);
+    // North homes, the farm's windmill, and the two research buildings.
+    add(4 * TILE, () => building(ctx, 2, 2, 3, 2, '#99795d'));
+    add(5 * TILE, () => building(ctx, 25, 2, 4, 3, '#876b77'));
+    add(2 * TILE + 14, () => northGate(ctx, gateOpen));
     add(8 * TILE, () => windmill(ctx, t));
     add(8 * TILE + 2, () => tower(ctx));
     add(9 * TILE, () => building(ctx, 18, 3, 6, 6, '#557b78', 'lab'));
     add(14 * TILE, () => building(ctx, 3, 10, 6, 4, '#b16d4d', 'home'));
     add(14 * TILE, () => building(ctx, 25, 10, 5, 4, '#aa7252', 'sanctuary'));
-    add(9 * TILE + 18, () => person(ctx, 20, 9, 'lyra'));
-    add(13 * TILE + 18, () => person(ctx, 17, 13, 'kai'));
-    add(16 * TILE + 10, () => board(ctx, 13, 16));
-    add(15 * TILE, () => {
-      const x = 30 * TILE, y = 15 * TILE;
-      rect(ctx, '#66513a', x - 7, y - 25, 7, 53); rect(ctx, '#b69b65', x - 8, y - 27, 9, 5);
-      rect(ctx, '#66513a', x - 7, y + 50, 7, 21); rect(ctx, '#b69b65', x - 8, y + 48, 9, 5);
-      poly(ctx, '#d2c090', [[x - 28, y - 21], [x + 10, y - 21], [x + 19, y - 13], [x + 10, y - 5], [x - 28, y - 5]]);
-      rect(ctx, '#728269', x - 22, y - 15, 27, 3);
+    add(17 * TILE, () => {
+      building(ctx, 19, 14, 4, 3, '#ad8d50', 'shop');
+      // Nell's striped awning and hanging bottle make the store recognizable.
+      for (let i = 0; i < 8; i++) rect(ctx, i % 2 ? '#d8cba4' : '#718e83', 19 * TILE + i * 12, 15 * TILE + 13, 12, 9);
+      rect(ctx, '#6a5841', 22 * TILE + 15, 16 * TILE - 3, 3, 20); rect(ctx, '#d8c693', 22 * TILE + 3, 16 * TILE - 5, 26, 17);
+      rect(ctx, '#6e9b92', 22 * TILE + 13, 16 * TILE - 1, 6, 9); rect(ctx, '#4e6d66', 22 * TILE + 14, 16 * TILE - 4, 4, 4);
     });
-    add(19 * TILE, () => { drawCreature(ctx, 'terradeer', { x: 500, y: 427, size: 37 }); });
+    add((state.act1Scene ? 11 : 9) * TILE + 18, () => person(ctx, state.act1Scene ? 16 : 20, state.act1Scene ? 11 : 9, 'lyra'));
+    add(13 * TILE + 18, () => person(ctx, 17, 13, 'kai'));
+    for (const [x, y, kind] of [[3, 9, 'mara'], [9, 17, 'bram'], [21, 17, 'nell'], [15, 12, 'rowan'], [13, 8, 'orin'], [26, 14, 'elin'], [18, 2, 'tomas'], [10, 13, 'child'], [23, 6, 'villager'], [7, 15, 'villager'], [2, 6, 'villager'], [26, 6, 'villager'], [18, 10, 'villager']]) {
+      add(y * TILE + 18, () => person(ctx, x, y, kind));
+    }
+    add(16 * TILE + 10, () => oracleBoard(ctx, scene, t, reduceMotion));
+    add(9 * TILE + 17, () => {
+      crate(ctx, field.farmCrateMoved ? 5 : 4, 9, { open: field.farmCrateMoved });
+      if (field.farmCrateMoved && !records.includes('farm')) {
+        rect(ctx, '#ecdfb7', 4 * TILE + 3, 9 * TILE + 8, 16, 13); rect(ctx, '#a59a73', 4 * TILE + 5, 9 * TILE + 11, 11, 2);
+      }
+    });
+    add(18 * TILE + 22, () => reeds(ctx, 10, 18, t, !records.includes('river')));
+    add(19 * TILE + 16, () => {
+      if (!side.scarfFound) {
+        poly(ctx, '#b9757d', [[292, 462], [302, 459], [307, 465], [303, 470], [296, 467], [294, 476], [288, 475]]);
+        rect(ctx, '#e4bd9a', 292, 461, 3, 13);
+      }
+    });
+    add(15 * TILE + 15, () => {
+      // An old observer's book on a dry bench beside home.
+      rect(ctx, '#725c40', 66, 367, 41, 6); rect(ctx, '#a8895c', 64, 363, 45, 5);
+      rect(ctx, '#6c5b41', 69, 371, 4, 9); rect(ctx, '#6c5b41', 101, 371, 4, 9);
+      rect(ctx, '#6b817c', 78, 354, 17, 10); rect(ctx, side.oldJournal ? '#e5d7b1' : '#d7bf85', 80, 355, 13, 7);
+      rect(ctx, '#8a9474', 86, 355, 1, 7);
+    });
+    add(19 * TILE + 17, () => crate(ctx, 28, 19, { open: !!side.supplyChest }));
+    add(17 * TILE + 16, () => {
+      rect(ctx, '#786645', 24 * TILE, 17 * TILE - 7, 43, 21);
+      for (let i = 0; i < 5; i++) { rect(ctx, '#9f8956', 24 * TILE + 2, 17 * TILE - 4 + i * 4, 39, 1); flowers(ctx, 24 * TILE + 8 + i * 7, 17 * TILE + 4, '#bbbe7d'); }
+      if (scene !== 'calm' && !side.gardenCleared) {
+        poly(ctx, '#91704d', [[579, 407], [607, 420], [604, 424], [576, 411]]);
+        poly(ctx, '#b19465', [[586, 425], [604, 404], [609, 407], [590, 428]]);
+      }
+    });
+    if (!state.flags?.recruitedVoltkit) add(8 * TILE + 18, () => drawCreature(ctx, 'voltkit', { x: 28 * TILE - 4, y: 8 * TILE - 17, size: 35, time: t }));
+    add(16 * TILE + 14, () => drawCreature(ctx, 'terradeer', { x: 670, y: 364, size: 32 }));
   } else {
     ellipse(ctx, '#90a361', 225, 393, 88, 53);
     ellipse(ctx, '#9caf6b', 217, 385, 72, 43);
@@ -461,12 +655,17 @@ export function renderWorld(canvas, state, { selectedTarget, reduceMotion = fals
     rect(ctx, night ? `rgba(218,226,139,${alpha})` : 'rgba(252,237,193,.22)', x, y, 2, 2);
   }
 
+  if (!forest && scene === 'storm') storm(ctx, t, reduceMotion);
+
   if (!forest) {
     label(ctx, "LYRA'S LAB", 505, 61, { selected: selected === 'lab' });
     label(ctx, 'HOME', 142, 239, { selected: selected === 'home', small: true });
     label(ctx, 'SANCTUARY', 659, 239, { selected: selected === 'sanctuary', small: true });
     label(ctx, 'WEATHER TOWER', 300, 189, { selected: selected === 'tower', small: true });
-    label(ctx, 'FOREST →', 704, 415, { selected: selected === 'gate', small: true });
+    label(ctx, 'CROPLANDS', 83, 20, { selected: selected === 'farm', small: true });
+    label(ctx, 'GENERAL STORE', 505, 327, { selected: selected === 'shop', small: true });
+    label(ctx, "TWIN SCHOLARS' FOREST ↑", 396, 4, { selected: selected === 'gate', small: true });
+    label(ctx, 'OLD BRIDGE · FISHING DOCK', 397, 496, { selected: selected === 'river', small: true });
     beacon(ctx, 20 * TILE + 12, 9 * TILE - 16, t, selected === 'lab');
     beacon(ctx, 17 * TILE + 12, 13 * TILE - 16, t, selected === 'kai');
   } else {
@@ -485,6 +684,9 @@ export function renderWorld(canvas, state, { selectedTarget, reduceMotion = fals
     ctx.strokeRect(target.x * TILE + 2, target.y * TILE + 2, 20, 20); ctx.restore();
     if (!['lab', 'kai', 'inferra'].includes(target.id)) beacon(ctx, x, y - 12, t, true);
     if (target.id === 'kai') label(ctx, 'KAI', x, y - 70, { selected: true, small: true });
+    else if (!forest && !['lab', 'tower', 'home', 'sanctuary', 'shop', 'gate', 'farm', 'river'].includes(target.id)) {
+      label(ctx, target.name.toUpperCase(), x, Math.max(25, y - 64), { selected: true, small: true });
+    }
   }
   // Soft vignette makes the map read like a little illustrated diorama.
   const vignette = ctx.createRadialGradient(384, 264, 195, 384, 264, 470);
@@ -539,6 +741,22 @@ export function drawCreature(canvasOrContext, speciesId, opts = {}) {
     r('#52734b', 14, 19, 3, 2); r('#c0cf8f', 13, 10, 3, 4);
     p('#a6bb79', [[14, 6], [18, 5], [17, 9], [14, 11], [12, 9]]); r('#e6d2a0', 13, 7, 3, 3);
     p('#6f995b', [[25, 20], [30, 17], [29, 22], [25, 24]]);
+  } else if (species === 'cloudfin') {
+    // A floating river companion with a cloud-white ruff and translucent fins.
+    p('#416d83', [[7, 13], [4, 17], [5, 23], [11, 27], [21, 26], [26, 22], [27, 15], [22, 10], [13, 9]]);
+    p('#83bed0', [[8, 14], [6, 18], [8, 23], [13, 25], [21, 24], [24, 20], [24, 15], [20, 12], [13, 11]]);
+    p('#c2e2dc', [[11, 12], [9, 16], [12, 18], [20, 18], [23, 15], [20, 12]]);
+    p('#477f9a', [[24, 15], [29, 10], [31, 13], [29, 18], [31, 24], [28, 26], [24, 22]]);
+    p('#9ed2df', [[25, 17], [29, 13], [28, 18], [29, 23], [25, 21]]);
+    p('#558da4', [[11, 12], [14, 5], [18, 4], [21, 7], [20, 12]]);
+    p('#cae8e1', [[13, 10], [16, 6], [18, 6], [19, 10]]);
+    p('#eef0df', [[5, 12], [6, 8], [10, 7], [12, 9], [16, 8], [19, 10], [19, 13], [15, 15], [11, 13], [8, 15]]);
+    p('#a3cdd0', [[8, 14], [11, 12], [14, 15], [19, 14], [22, 18], [19, 22], [10, 23], [7, 19]]);
+    p('#e6eedd', [[8, 19], [12, 20], [18, 19], [20, 21], [17, 24], [11, 24], [8, 22]]);
+    r('#284d60', 8, 16, 3, 3); r('#f6f6e5', 8, 16, 1, 1);
+    r('#58889d', 8, 20, 4, 1);
+    p('#c8e5df', [[16, 20], [22, 18], [21, 24], [17, 27], [15, 25]]);
+    r('#e8f2e4', 2, 5, 2, 2); r('#a1c8d0', 27, 4, 2, 2);
   } else if (species === 'samplet') {
     p('#675a84', [[7, 14], [5, 10], [5, 4], [8, 2], [11, 4], [11, 12], [18, 11], [19, 3], [22, 2], [25, 5], [24, 13], [26, 19], [24, 27], [20, 29], [10, 29], [5, 24], [4, 19]]);
     p('#a798c2', [[8, 14], [7, 7], [8, 4], [9, 7], [10, 16], [20, 14], [21, 5], [23, 5], [22, 15], [24, 20], [22, 26], [18, 28], [11, 27], [7, 24], [6, 19]]);

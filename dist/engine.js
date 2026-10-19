@@ -47,7 +47,45 @@ export const SPECIES = {
     habitat: 'Forest lookout', baseHp: 30, power: 6, guard: 4,
     moves: [...basics, move('moon_arc', 'Moon Arc', 'A graceful arc of moonlight. Costs 2 Focus.', 14, 2)],
   },
+  creature_cloudfin: {
+    id: 'creature_cloudfin', name: 'Cloudfin', role: 'Training companion', type: 'Water', color: '#82cbe0', symbol: '🐟',
+    description: 'A calm river Databeast entrusted to new Observers during their first switching lesson. Lyra takes it home after training.',
+    habitat: 'Harvest Village river', baseHp: 36, power: 6, guard: 5,
+    moves: [...basics, move('river_surge', 'River Surge', 'Spend 2 Focus on a controlled wave.', 14, 2)],
+  },
 };
+
+// Stable evidence identifiers are shared by the journal, dialogue, and saved game.
+export const ACT1_RECORDS = [
+  { id: 'farm', title: "Farmer's Ledger", location: 'Farm Fields', cycle: 62, day: 124, rainfall: 12, temperature: 17, archiveRainfall: 0 },
+  { id: 'river', title: 'River Observation Sheet', location: 'River and Old Bridge', cycle: 61, day: 126, rainfall: 28, temperature: 15, archiveRainfall: 0 },
+  { id: 'shop', title: 'Village Weather Register', location: 'General Store', cycle: 60, day: 127, rainfall: 7, temperature: 19, archiveRainfall: 0 },
+];
+export const ACT1_SHOP = [
+  { id: 'potion', title: 'Small Healing Potion', price: 12, inventoryKey: 'potions' },
+  { id: 'bond_crystal', title: 'Bond Crystal', price: 20, inventoryKey: 'bondCrystals' },
+  { id: 'antidote', title: 'Antidote', price: 10, inventoryKey: 'antidotes' },
+];
+const RECORD_IDS = ACT1_RECORDS.map(record => record.id);
+const SHOP_INSPECTIONS = ['shop_receipt', 'shop_box', 'shop_tower'];
+const BORROWED_UID = 'act1-training-cloudfin';
+function createAct1() {
+  return {
+    migrated: false, introComplete: false, started: false, records: [],
+    fieldSteps: { farmCrateMoved: false, riverLocated: false, shopInspected: [] },
+    compared: [], comparisonComplete: false, dexReceived: false, demos: [], councilComplete: false, combatDifficulty: 'standard',
+    tutorial: { attack: false, guard: false, scan: false, switch: false },
+    side: { scarfFound: false, scarfReturned: false, oldJournal: false, supplyChest: false, gardenCleared: false },
+  };
+}
+function isAct1Tutorial(state) { return state.battle?.kind === 'rival' && !state.act1.migrated && !state.flags.rivalDefeated; }
+export function getAct1TutorialStep(state) {
+  return isAct1Tutorial(state) ? Object.keys(state.act1.tutorial).find(key => !state.act1.tutorial[key]) || null : null;
+}
+function removeTrainingPartner(state) {
+  state.party = state.party.filter(member => member.uid !== BORROWED_UID);
+  state.dex.species.creature_cloudfin.recruited = state.party.some(member => member.speciesId === 'creature_cloudfin');
+}
 
 const sightings = (samplet, voltkit, bayowl) => [
   { speciesId: 'creature_samplet', count: samplet },
@@ -61,7 +99,7 @@ export const HABITATS = [
 ].map(habitat => ({ ...habitat, day: habitat.observations.day, night: habitat.observations.night }));
 const STARTERS = ['creature_statifox', 'creature_algobear', 'creature_terradeer'];
 const DIRECTIONS = ['up', 'down', 'left', 'right'];
-const CONCEPTS = ['concept_observation', 'concept_sampling_bias'];
+const CONCEPTS = ['concept_observation', 'concept_sampling_bias', 'concept_historical_observation'];
 const LEGACY_FLAGS = ['introSeen', 'rivalDefeated', 'recruitedVoltkit', 'compass'];
 const GAME_FLAGS = [...LEGACY_FLAGS, 'reportedToLyra'];
 
@@ -70,7 +108,7 @@ export function createGame() {
     schemaVersion: SCHEMA_VERSION,
     player: { name: 'Observer', x: 16, y: 15, facing: 'down' },
     map: 'village', time: 'day', starter: null, party: [],
-    inventory: { potions: 3, bondCrystals: 5 },
+    inventory: { potions: 3, bondCrystals: 5, antidotes: 0, archiveFragments: 0 },
     dex: {
       species: Object.fromEntries(Object.keys(SPECIES).map(id => [id, { seen: false, recruited: false, scans: 0, observations: [] }])),
       concepts: Object.fromEntries(CONCEPTS.map(id => [id, 'unknown'])),
@@ -78,7 +116,7 @@ export function createGame() {
     quests: { firstBond: { status: 'locked' }, nocturnal: { status: 'locked', observations: [], attempts: 0, hints: 0 } },
     battle: null,
     flags: { introSeen: false, rivalDefeated: false, recruitedVoltkit: false, compass: false, reportedToLyra: false },
-    coins: 0, researchPoints: 0,
+    coins: 0, researchPoints: 0, act1: createAct1(),
   };
 }
 
@@ -134,7 +172,8 @@ function noBattleReward(outcome) {
 function awardVictory(state, events, bonded = false) {
   const battle = state.battle;
   const firstRivalWin = battle.kind === 'rival' && !state.flags.rivalDefeated;
-  const member = activeMember(state);
+  // A loan teaches switching; the selected permanent partner earns tutorial XP.
+  const member = isAct1Tutorial(state) ? state.party[0] : activeMember(state);
   const before = progressionSnapshot(member);
   const levelUps = [];
   const xpGained = battle.kind === 'rival' ? 30 : 18;
@@ -154,12 +193,18 @@ function awardVictory(state, events, bonded = false) {
       side: 'player', type: 'status', actor, target: actor, action: 'Level up',
     });
   }
-  state.coins += battle.kind === 'rival' ? 30 : 12;
+  state.coins += battle.kind === 'rival' ? (firstRivalWin ? 30 : 0) : 12;
   if (battle.kind === 'rival') {
+    const tutorial = isAct1Tutorial(state);
+    removeTrainingPartner(state);
     state.flags.rivalDefeated = true;
     state.quests.firstBond.status = 'complete';
     restoreParty(state);
-    events.push(firstRivalWin ? 'Kai: You and your partner make a great team. The forest gate is open!' : 'Kai: Good match! Your team has been healed.');
+    if (firstRivalWin && tutorial) {
+      state.inventory.bondCrystals = Math.min(999, state.inventory.bondCrystals + 2);
+      events.push('Lyra takes Cloudfin back to the sanctuary and gives you two Bond Crystals. Meet the village council in the town square before departing.');
+    }
+    events.push(firstRivalWin ? (state.act1.migrated ? 'Kai: You and your partner make a great team. The forest gate is open!' : 'Kai: You and your partner make a great team. Rowan and Lyra are waiting at the council.') : 'Kai: Good match! Your team has been healed.');
   } else if (!bonded) {
     events.push('Voltkit slipped back into the grass. Another encounter is always available; try scanning and weakening it before bonding.');
   }
@@ -199,7 +244,8 @@ function enemyTurn(state, events) {
     });
   } else {
     enemy.focus = Math.max(0, enemy.focus - chosen.cost);
-    const hit = Math.max(2, Math.floor(damage(enemy, member, chosen.power, battle.guarded) * (battle.kind === 'rival' ? 0.62 : 0.57)));
+    const incomingScale=state.act1.combatDifficulty==='relaxed'?0.4:battle.kind==='rival'?0.62:0.57;
+    const hit = Math.max(2, Math.floor(damage(enemy, member, chosen.power, battle.guarded) * incomingScale));
     const lost = Math.min(member.hp, hit);
     member.hp = Math.max(0, member.hp - hit);
     const target = battler(member, 'player');
@@ -227,6 +273,7 @@ function enemyTurn(state, events) {
       });
       events.push('Your team needs rest. Lyra brings you to the sanctuary; everyone has been healed. You can try again.');
       restoreParty(state);
+      removeTrainingPartner(state);
       state.map = 'village';
       state.player.x = 16;
       state.player.y = 13;
@@ -247,13 +294,150 @@ export function act(currentState, action, rng = Math.random) {
   const events = [];
   let battleProgression = null;
   switch (action.type) {
+    case 'SET_COMBAT_DIFFICULTY': {
+      requirePeace(state);
+      ensure(['standard','relaxed'].includes(action.difficulty), 'Choose Standard or Relaxed combat.');
+      state.act1.combatDifficulty=action.difficulty;
+      events.push(`${action.difficulty==='relaxed'?'Relaxed':'Standard'} combat selected. Learning preferences and story progress are unchanged.`);
+      break;
+    }
+    case 'ACT1_INTRO_COMPLETE': {
+      requirePeace(state);
+      ensure(state.map === 'village', 'Watch the opening in Harvest Village.');
+      state.act1.introComplete = true;
+      state.flags.introSeen = true;
+      events.push('The Oracle predicted 0 mm. The gauge recorded 46 mm. Lyra needs your help at the Research Lab.');
+      break;
+    }
+    case 'ACT1_START': {
+      requirePeace(state);
+      ensure(state.map === 'village', 'Meet Professor Lyra in Harvest Village.');
+      ensure(state.act1.introComplete, 'Finish the opening before meeting Lyra.');
+      state.act1.started = true;
+      advanceConcept(state, 'concept_historical_observation', 'encountered');
+      events.push('Find three storm-scattered records: Mara’s farm crate, the river reeds, and Nell’s shop documents. They can be recovered in any order.');
+      break;
+    }
+    case 'ACT1_FIELD_ACTION': {
+      requirePeace(state);
+      ensure(state.map === 'village' && state.act1.started, 'Accept Lyra’s rainfall investigation in Harvest Village first.');
+      if (action.id === 'farm_crate') {
+        state.act1.fieldSteps.farmCrateMoved = true;
+        events.push('You and Mara shift the damaged crate. A farmer’s handwritten ledger is revealed underneath. Pick up the ledger.');
+      } else if (action.id === 'river_reeds') {
+        state.act1.fieldSteps.riverLocated = true;
+        events.push('You follow the ripples along the safe riverbank. A waterlogged observation sheet is caught in the reeds. Retrieve the sheet.');
+      } else {
+        ensure(SHOP_INSPECTIONS.includes(action.id), 'Inspect a known village clue.');
+        if (!state.act1.fieldSteps.shopInspected.includes(action.id)) state.act1.fieldSteps.shopInspected.push(action.id);
+        const descriptions = { shop_receipt: 'A shipping receipt records a delivery from the Weather Tower.', shop_box: 'An empty potion box contains no weather observations.', shop_tower: 'The tower emblem identifies a weather register. Compare all three objects before collecting it.' };
+        events.push(descriptions[action.id]);
+      }
+      break;
+    }
+    case 'ACT1_COLLECT_RECORD': {
+      requirePeace(state);
+      ensure(state.map === 'village' && state.act1.started, 'Accept Lyra’s rainfall investigation in Harvest Village first.');
+      const record = ACT1_RECORDS.find(record => record.id === action.id);
+      ensure(record, 'Choose a known rainfall record.');
+      const ready = action.id === 'farm' ? state.act1.fieldSteps.farmCrateMoved : action.id === 'river' ? state.act1.fieldSteps.riverLocated : SHOP_INSPECTIONS.every(id => state.act1.fieldSteps.shopInspected.includes(id));
+      ensure(ready, action.id === 'farm' ? 'Move the damaged farm crate to reveal the ledger.' : action.id === 'river' ? 'Follow the river ripples and inspect the reeds.' : 'Inspect the shipping receipt, potion box, and stamped tower document.');
+      if (state.act1.records.includes(record.id)) { events.push(`${record.title} is already preserved in your journal.`); break; }
+      state.act1.records.push(record.id);
+      events.push(`Recovered ${record.title}: Cycle ${record.cycle}, Day ${record.day}; ${record.rainfall} mm rainfall at ${record.temperature}°C.`);
+      if (state.act1.records.length === 3) events.push('All three original records are safe. Bring them to Orin’s comparison table at the Weather Tower.');
+      break;
+    }
+    case 'ACT1_COMPARE_RECORD': {
+      requirePeace(state);
+      ensure(state.map === 'village' && state.act1.records.length === 3, 'Recover all three rainfall records before using the Weather Tower comparison table.');
+      const record = ACT1_RECORDS.find(record => record.id === action.id);
+      ensure(record, 'Inspect a known rainfall record.');
+      if (!state.act1.compared.includes(record.id)) state.act1.compared.push(record.id);
+      events.push(`${record.title}: the original records ${record.rainfall} mm; the Archive copy records ${record.archiveRainfall} mm. These entries disagree.`);
+      break;
+    }
+    case 'ACT1_COMPLETE_COMPARISON': {
+      requirePeace(state);
+      ensure(state.map === 'village' && state.act1.records.length === 3 && state.act1.compared.length === 3, 'Examine all three original records beside their Archive copies at the Weather Tower.');
+      if (state.act1.comparisonComplete) { events.push('The discrepancy is already recorded. The source history remains incomplete.'); break; }
+      state.act1.comparisonComplete = true;
+      state.researchPoints += 10;
+      advanceConcept(state, 'concept_historical_observation', 'understood');
+      if (state.act1.side.oldJournal && state.act1.side.gardenCleared) advanceConcept(state, 'concept_historical_observation', 'mastered');
+      advanceConcept(state, 'concept_observation', 'encountered');
+      events.push('DATA INTEGRITY WARNING: original observations record rain; the Archive copies record none. This discrepancy gives a reason to investigate, but does not establish who changed the records or why.');
+      break;
+    }
+    case 'ACT1_RECEIVE_DEX': {
+      requirePeace(state);
+      ensure(state.map === 'village' && state.act1.comparisonComplete, 'Complete the historical record comparison before receiving the DataDex.');
+      if (state.act1.dexReceived) { events.push('Your DataDex is already activated. Visit Lyra’s starter demonstrations.'); break; }
+      state.act1.dexReceived = true;
+      state.coins += 50;
+      events.push('DataDex activated: Observation, free battle Scan, and research tracking. Lyra provides 50 Aether Coins for supplies. Visit the Research Lab to meet all three companions.');
+      break;
+    }
+    case 'ACT1_DEMO': {
+      requirePeace(state);
+      ensure(state.map === 'village' && state.act1.dexReceived, 'Receive the DataDex from Lyra before visiting the starter demonstrations.');
+      ensure(STARTERS.includes(action.id), 'Choose one of Lyra’s three demonstrations.');
+      if (!state.act1.demos.includes(action.id)) state.act1.demos.push(action.id);
+      trackSeen(state, action.id);
+      const demonstrations = { creature_statifox: 'Statifox points out the faulty weather sensor among the readings.', creature_algobear: 'Algobear reorders the jammed gears and restarts the mechanism.', creature_terradeer: 'Terradeer reveals the excessive moisture around the potted crop’s roots.' };
+      recordDexObservation(state, action.id, demonstrations[action.id]);
+      events.push(demonstrations[action.id]);
+      break;
+    }
+    case 'ACT1_COUNCIL_COMPLETE': {
+      requirePeace(state);
+      ensure(state.map === 'village' && state.act1.dexReceived && state.flags.rivalDefeated, 'Finish the rainfall investigation and Kai’s friendly battle before the council meets.');
+      state.act1.councilComplete = true;
+      events.push('The council restores local observation keeping. Tomas opens the northern road permanently. Act I complete — seek Professor Inferra in Twin Scholars’ Forest.');
+      break;
+    }
+    case 'ACT1_SIDE_ACTION': {
+      requirePeace(state);
+      ensure(state.map === 'village' && state.act1.introComplete, 'Explore Harvest Village after the storm.');
+      const side = state.act1.side;
+      const activities = {
+        scarf_find: ['scarfFound', 'You retrieve the child’s storm-tossed scarf. Return it in the residential lane.'],
+        scarf_return: ['scarfReturned', 'The child wraps up warmly again. Received 15 Aether Coins.'],
+        old_journal: ['oldJournal', 'An old Observer’s journal explains how neighbors shared weather observations. Received one Archive Fragment.'],
+        supply_chest: ['supplyChest', 'You follow the passage behind the shop crates and open a supply chest. Received one healing potion.'],
+        garden_clear: ['gardenCleared', 'You clear the flooded garden’s blocked drainage. Water can flow away from the roots. Received 5 Research Points.'],
+      };
+      ensure(Object.hasOwn(activities, action.id), 'Choose a known village activity.');
+      if (action.id === 'scarf_return') ensure(side.scarfFound, 'Find the lost scarf before returning it.');
+      const [flag, message] = activities[action.id];
+      if (side[flag]) { events.push('You have already helped here. Your discovery is preserved in the journal.'); break; }
+      side[flag] = true;
+      if (action.id === 'scarf_return') state.coins += 15;
+      if (action.id === 'old_journal') state.inventory.archiveFragments = Math.min(999, state.inventory.archiveFragments + 1);
+      if (action.id === 'supply_chest') state.inventory.potions = Math.min(999, state.inventory.potions + 1);
+      if (action.id === 'garden_clear') state.researchPoints += 5;
+      if (side.oldJournal && side.gardenCleared && state.act1.comparisonComplete) advanceConcept(state, 'concept_historical_observation', 'mastered');
+      events.push(message);
+      break;
+    }
+    case 'BUY_ITEM': {
+      requirePeace(state);
+      ensure(state.map === 'village', 'Visit Nell’s General Store in Harvest Village.');
+      const item = ACT1_SHOP.find(item => item.id === action.id);
+      ensure(item, 'Choose an item stocked by Nell.');
+      ensure(state.coins >= item.price, `You need ${item.price} Aether Coins for ${item.title}.`);
+      ensure(state.inventory[item.inventoryKey] < 999, 'You cannot carry any more of this item.');
+      state.coins -= item.price;
+      state.inventory[item.inventoryKey] += 1;
+      events.push(`Bought ${item.title} for ${item.price} Aether Coins.`);
+      break;
+    }
     case 'SET_NAME': {
       requirePeace(state);
       ensure(typeof action.name === 'string', 'Your name must be text.');
       const name = action.name.trim();
       ensure(name.length >= 1 && name.length <= 24, 'Choose a name between 1 and 24 characters.');
       state.player.name = name;
-      state.flags.introSeen = true;
       events.push(`Welcome to Harvest Village, ${name}.`);
       break;
     }
@@ -261,6 +445,7 @@ export function act(currentState, action, rng = Math.random) {
       requirePeace(state);
       ensure(!state.starter, 'You have already chosen your first partner.');
       ensure(STARTERS.includes(action.speciesId), 'Choose one of the three starter Databeasts.');
+      ensure(state.act1.migrated || state.act1.dexReceived && STARTERS.every(id => state.act1.demos.includes(id)), 'Complete the rainfall investigation, receive the DataDex, and watch all three starter demonstrations first.');
       state.starter = action.speciesId;
       state.party.push(creature(action.speciesId, 5, `partner-${action.speciesId}`));
       state.dex.species[action.speciesId].seen = true;
@@ -278,6 +463,7 @@ export function act(currentState, action, rng = Math.random) {
       const map = action.map || state.map;
       ensure(['village', 'forest'].includes(map), 'That map is unavailable.');
       ensure(map !== 'forest' || state.flags.rivalDefeated, 'Battle Kai before entering the forest.');
+      ensure(map !== 'forest' || state.act1.migrated || state.act1.councilComplete, 'Join Rowan and Lyra at the village council before entering the northern forest.');
       state.player.x = action.x;
       state.player.y = action.y;
       state.player.facing = action.facing || state.player.facing;
@@ -299,8 +485,14 @@ export function act(currentState, action, rng = Math.random) {
       ensure(action.kind !== 'wild' || !state.flags.recruitedVoltkit, 'Voltkit already joined your team.');
       const index = state.party.findIndex(member => member.hp > 0);
       ensure(index >= 0, 'Rest at the sanctuary before battling.');
-      const speciesId = action.kind === 'wild' ? 'creature_voltkit' : STARTERS[(STARTERS.indexOf(state.starter) + 1) % STARTERS.length];
-      state.battle = { kind: action.kind, enemy: creature(speciesId, action.kind === 'rival' ? 5 : 4, `enemy-${speciesId}`), activeIndex: index, turn: 1, scanned: false, log: [], enemyHistory: [], guarded: false, enemyGuarded: false, bondAttempts: 0 };
+      const tutorial = action.kind === 'rival' && !state.act1.migrated && !state.flags.rivalDefeated;
+      const speciesId = action.kind === 'wild' || !state.act1.migrated ? 'creature_voltkit' : STARTERS[(STARTERS.indexOf(state.starter) + 1) % STARTERS.length];
+      if (tutorial) {
+        state.party.push(creature('creature_cloudfin', 5, BORROWED_UID));
+        Object.assign(state.dex.species.creature_cloudfin, { seen: true, recruited: true });
+        events.push('Lyra lends you Cloudfin for this lesson. Practice an attack, Guard, the free Scan, and switching before finishing the match.');
+      }
+      state.battle = { kind: action.kind, enemy: creature(speciesId, state.act1.migrated && action.kind === 'rival' ? 5 : 4, `enemy-${speciesId}`), activeIndex: index, turn: 1, scanned: false, log: [], enemyHistory: [], guarded: false, enemyGuarded: false, bondAttempts: 0 };
       trackSeen(state, speciesId);
       addLog(state, events, action.kind === 'rival' ? `Kai challenges you with ${SPECIES[speciesId].name}!` : 'A curious wild Voltkit appears!', {
         side: 'system', type: 'intro', actor: null, target: battler(state.battle.enemy, 'enemy'), action: 'Encounter',
@@ -312,6 +504,7 @@ export function act(currentState, action, rng = Math.random) {
       ensure(!state.battle.scanned, 'You have already scanned this encounter. Scanning costs no turn.');
       const battle = state.battle;
       battle.scanned = true;
+      if (isAct1Tutorial(state)) state.act1.tutorial.scan = true;
       state.dex.species[battle.enemy.speciesId].scans += 1;
       advanceConcept(state, 'concept_observation', 'understood');
       state.researchPoints += 2;
@@ -335,14 +528,17 @@ export function act(currentState, action, rng = Math.random) {
       const actor = battler(member, 'player');
       if (chosen.kind === 'attack') {
         const battle = state.battle;
+        if (isAct1Tutorial(state)) state.act1.tutorial.attack = true;
         const hit = damage(member, battle.enemy, chosen.power, battle.enemyGuarded);
-        const lost = Math.min(battle.enemy.hp, hit);
+        const practiceRemaining = getAct1TutorialStep(state);
+        const lost = Math.min(Math.max(0, battle.enemy.hp - (practiceRemaining ? 1 : 0)), hit);
         const target = battler(battle.enemy, 'enemy');
-        battle.enemy.hp = Math.max(0, battle.enemy.hp - hit);
+        battle.enemy.hp -= lost;
         addLog(state, events, `${battleName(actor)} used ${chosen.name} on ${battleName(target)}. ${battleName(target)} lost ${lost} HP${battle.enemyGuarded ? ' (guarded)' : ''}.`, {
           side: 'player', type: 'damage', actor, target, action: chosen.name, amount: lost, guarded: battle.enemyGuarded,
         });
         battle.enemyGuarded = false;
+        if (practiceRemaining && battle.enemy.hp === 1) events.push(`Kai pauses the finishing blow so you can practice ${practiceRemaining === 'switch' ? 'switching to the borrowed Cloudfin' : practiceRemaining}. Your progress is saved; the match can be finished after the lesson.`);
         if (battle.enemy.hp === 0) {
           addLog(state, events, `${battleName(target)} has fainted.`, {
             side: 'enemy', type: 'faint', actor: target, target, action: 'Fainted',
@@ -360,6 +556,7 @@ export function act(currentState, action, rng = Math.random) {
         const recovered = Math.min(chosen.power, 8 - member.focus);
         member.focus = Math.min(8, member.focus + chosen.power);
         state.battle.guarded = true;
+        if (isAct1Tutorial(state)) state.act1.tutorial.guard = true;
         addLog(state, events, `${battleName(actor)} used ${chosen.name}, recovered ${recovered} Focus, and guards against the next attack.`, {
           side: 'player', type: 'status', actor, target: actor, action: chosen.name, focus: recovered, guarded: true,
         });
@@ -374,6 +571,7 @@ export function act(currentState, action, rng = Math.random) {
       const actor = battler(member, 'player');
       member.focus = Math.min(8, member.focus + 3);
       state.battle.guarded = true;
+      if (isAct1Tutorial(state)) state.act1.tutorial.guard = true;
       addLog(state, events, `${battleName(actor)} guards against the next attack and recovers ${recovered} Focus.`, {
         side: 'player', type: 'status', actor, target: actor, action: 'Guard', focus: recovered, guarded: true,
       });
@@ -386,6 +584,7 @@ export function act(currentState, action, rng = Math.random) {
       ensure(action.index !== state.battle.activeIndex, 'That partner is already active.');
       const actor = battler(activeMember(state), 'player');
       state.battle.activeIndex = action.index;
+      if (isAct1Tutorial(state)) state.act1.tutorial.switch = true;
       const target = battler(activeMember(state), 'player');
       addLog(state, events, `${battleName(actor)} switches out for ${battleName(target)}. ${battleName(target)} takes the field.`, {
         side: 'player', type: 'switch', actor, target, action: 'Switch',
@@ -395,11 +594,12 @@ export function act(currentState, action, rng = Math.random) {
     }
     case 'BATTLE_POTION': {
       requireBattle(state);
-      ensure(state.inventory.potions > 0, 'No potions left. The sanctuary can restock your supplies.');
+      ensure(isAct1Tutorial(state) || state.inventory.potions > 0, 'No potions left. The sanctuary can restock your supplies.');
       const member = activeMember(state);
       ensure(member.hp < member.maxHp, 'Your partner already has full HP.');
       const restored = Math.min(30, member.maxHp - member.hp);
-      state.inventory.potions -= 1;
+      // The first lesson uses Lyra's practice supply, so defeat never costs items.
+      if (!isAct1Tutorial(state)) state.inventory.potions -= 1;
       member.hp += restored;
       const actor = trainer(state);
       const target = battler(member, 'player');
@@ -607,7 +807,7 @@ function validateBattleLogRow(row, state) {
   if (row.type === 'faint') ensure(row.actor?.speciesId && JSON.stringify(row.actor) === JSON.stringify(row.target), 'Invalid fainted participant.');
 }
 function validateGame(state) {
-  ensure(keysExactly(state, ['schemaVersion', 'player', 'map', 'time', 'starter', 'party', 'inventory', 'dex', 'quests', 'battle', 'flags', 'coins', 'researchPoints']), 'Invalid save: game fields are missing or unexpected.');
+  ensure(keysExactly(state, ['schemaVersion', 'player', 'map', 'time', 'starter', 'party', 'inventory', 'dex', 'quests', 'battle', 'flags', 'coins', 'researchPoints', 'act1']), 'Invalid save: game fields are missing or unexpected.');
   ensure(state.schemaVersion === SCHEMA_VERSION, 'This save version is not supported.');
   ensure(keysExactly(state.player, ['name', 'x', 'y', 'facing']) && textValue(state.player.name, 24) && state.player.name.trim().length > 0, 'Invalid player record.');
   ensure(integer(state.player.x, 0, 31) && integer(state.player.y, 0, 21) && DIRECTIONS.includes(state.player.facing), 'Invalid player position.');
@@ -617,7 +817,7 @@ function validateGame(state) {
   state.party.forEach(validateCreature);
   ensure(new Set(state.party.map(member => member.uid)).size === state.party.length, 'Duplicate party member.');
   ensure(state.starter === null ? state.party.length === 0 : state.party.length > 0 && state.party[0].speciesId === state.starter, 'Starter and party do not match.');
-  ensure(keysExactly(state.inventory, ['potions', 'bondCrystals']) && Object.values(state.inventory).every(value => integer(value, 0, 999)), 'Invalid inventory.');
+  ensure(keysExactly(state.inventory, ['potions', 'bondCrystals', 'antidotes', 'archiveFragments']) && Object.values(state.inventory).every(value => integer(value, 0, 999)), 'Invalid inventory.');
   ensure(integer(state.coins, 0, 1000000) && integer(state.researchPoints, 0, 1000000), 'Invalid rewards.');
   ensure(keysExactly(state.dex, ['species', 'concepts']) && keysExactly(state.dex.species, Object.keys(SPECIES)) && keysExactly(state.dex.concepts, CONCEPTS), 'Invalid DataDex.');
   Object.entries(state.dex.species).forEach(([id, entry]) => {
@@ -628,6 +828,7 @@ function validateGame(state) {
   });
   ensure(Object.values(state.dex.concepts).every(value => ['unknown', 'encountered', 'understood', 'mastered'].includes(value)), 'Invalid concept status.');
   ensure(keysExactly(state.flags, GAME_FLAGS) && Object.values(state.flags).every(value => typeof value === 'boolean'), 'Invalid game flags.');
+  validateAct1(state);
   ensure(state.map !== 'forest' || state.flags.rivalDefeated, 'The forest has not been unlocked.');
   ensure(state.flags.recruitedVoltkit === state.party.some(member => member.speciesId === 'creature_voltkit'), 'Voltkit recruitment records do not match.');
   ensure(keysExactly(state.quests, ['firstBond', 'nocturnal']) && keysExactly(state.quests.firstBond, ['status']) && keysExactly(state.quests.nocturnal, ['status', 'observations', 'attempts', 'hints']), 'Invalid quest records.');
@@ -660,7 +861,7 @@ function validateGame(state) {
     validateCreature(battle.enemy);
     ensure(battle.enemy.hp > 0 && integer(battle.activeIndex, 0, state.party.length - 1) && state.party[battle.activeIndex].hp > 0, 'Invalid active battler.');
     ensure(battle.kind !== 'wild' || battle.enemy.speciesId === 'creature_voltkit' && state.flags.rivalDefeated && !state.flags.recruitedVoltkit, 'Invalid wild encounter.');
-    ensure(battle.kind !== 'rival' || battle.enemy.speciesId === STARTERS[(STARTERS.indexOf(state.starter) + 1) % STARTERS.length], 'Invalid rival partner.');
+    ensure(battle.kind !== 'rival' || battle.enemy.speciesId === (state.act1.migrated ? STARTERS[(STARTERS.indexOf(state.starter) + 1) % STARTERS.length] : 'creature_voltkit'), 'Invalid rival partner.');
     ensure(integer(battle.turn, 1, 100000) && integer(battle.bondAttempts, 0, 100000) && ['scanned', 'guarded', 'enemyGuarded'].every(key => typeof battle[key] === 'boolean'), 'Invalid battle progress.');
     ensure(Array.isArray(battle.log) && battle.log.length <= 50, 'Invalid battle log.');
     let previousLogTurn = 1;
@@ -674,6 +875,37 @@ function validateGame(state) {
     ensure(Array.isArray(battle.enemyHistory) && battle.enemyHistory.length <= 30, 'Invalid enemy history.');
     battle.enemyHistory.forEach(row => ensure(keysExactly(row, ['turn', 'moveId', 'name']) && integer(row.turn, 1, battle.turn - 1) && SPECIES[battle.enemy.speciesId].moves.some(move => move.id === row.moveId && move.name === row.name), 'Invalid observed enemy action.'));
   }
+}
+
+function uniqueIds(value, allowed) {
+  return Array.isArray(value) && value.length <= allowed.length && value.every(id => allowed.includes(id)) && new Set(value).size === value.length;
+}
+function validateAct1(state) {
+  const progress = state.act1;
+  ensure(keysExactly(progress, ['migrated', 'introComplete', 'started', 'records', 'fieldSteps', 'compared', 'comparisonComplete', 'dexReceived', 'demos', 'councilComplete', 'combatDifficulty', 'tutorial', 'side']), 'Invalid Act I progress.');
+  ensure(['standard','relaxed'].includes(progress.combatDifficulty), 'Invalid combat difficulty.');
+  ensure(['migrated', 'introComplete', 'started', 'comparisonComplete', 'dexReceived', 'councilComplete'].every(key => typeof progress[key] === 'boolean'), 'Invalid Act I flags.');
+  ensure(keysExactly(progress.fieldSteps, ['farmCrateMoved', 'riverLocated', 'shopInspected']) && typeof progress.fieldSteps.farmCrateMoved === 'boolean' && typeof progress.fieldSteps.riverLocated === 'boolean' && uniqueIds(progress.fieldSteps.shopInspected, SHOP_INSPECTIONS), 'Invalid Act I field observations.');
+  ensure(uniqueIds(progress.records, RECORD_IDS) && uniqueIds(progress.compared, RECORD_IDS) && uniqueIds(progress.demos, STARTERS), 'Invalid Act I record or demonstration identifiers.');
+  ensure(keysExactly(progress.tutorial, ['attack', 'guard', 'scan', 'switch']) && Object.values(progress.tutorial).every(value => typeof value === 'boolean'), 'Invalid Act I tutorial progress.');
+  ensure(keysExactly(progress.side, ['scarfFound', 'scarfReturned', 'oldJournal', 'supplyChest', 'gardenCleared']) && Object.values(progress.side).every(value => typeof value === 'boolean'), 'Invalid Act I side activity progress.');
+  ensure(!progress.side.scarfReturned || progress.side.scarfFound, 'The lost scarf must be found before it is returned.');
+  ensure(!progress.started || progress.introComplete, 'The rainfall investigation requires the opening.');
+  ensure(progress.started || progress.records.length === 0 && !progress.fieldSteps.farmCrateMoved && !progress.fieldSteps.riverLocated && progress.fieldSteps.shopInspected.length === 0, 'The rainfall investigation has not started.');
+  ensure(!progress.records.includes('farm') || progress.fieldSteps.farmCrateMoved, 'The farm ledger has not been revealed.');
+  ensure(!progress.records.includes('river') || progress.fieldSteps.riverLocated, 'The river record has not been located.');
+  ensure(!progress.records.includes('shop') || SHOP_INSPECTIONS.every(id => progress.fieldSteps.shopInspected.includes(id)), 'The shop documents have not been inspected.');
+  ensure(progress.compared.length === 0 || progress.records.length === 3, 'Collect all three records before comparison.');
+  ensure(!progress.comparisonComplete || progress.compared.length === 3, 'Compare all three original records before completing the investigation.');
+  ensure(!progress.dexReceived || progress.comparisonComplete, 'The DataDex requires the rainfall comparison.');
+  ensure(progress.demos.length === 0 || progress.dexReceived, 'The starter demonstrations require the DataDex.');
+  ensure(progress.migrated || !state.starter || progress.dexReceived && progress.demos.length === 3, 'Choosing a starter requires all three demonstrations.');
+  ensure(progress.migrated || !state.flags.rivalDefeated || Object.values(progress.tutorial).every(Boolean), 'The first battle tutorial is incomplete.');
+  ensure(!progress.councilComplete || progress.dexReceived && state.flags.rivalDefeated, 'The village council requires both Act I main quests.');
+  ensure(state.map !== 'forest' || progress.migrated || progress.councilComplete, 'The village council has not opened the forest road.');
+  const borrowed = state.party.filter(member => member.uid === BORROWED_UID);
+  ensure(borrowed.length === 0 || borrowed.length === 1 && borrowed[0].speciesId === 'creature_cloudfin' && isAct1Tutorial(state), 'The training Cloudfin must be returned after the lesson.');
+  ensure(!isAct1Tutorial(state) || borrowed.length === 1, 'The first battle needs Lyra’s borrowed training companion.');
 }
 
 export function serializeGame(state) {
@@ -690,6 +922,27 @@ export function parseGame(json) {
   if (isObject(state) && state.schemaVersion === SCHEMA_VERSION && keysExactly(state.flags, LEGACY_FLAGS)) {
     state = { ...state, flags: { ...state.flags, reportedToLyra: false } };
   }
+  // Original v1 adventures remain valid, including midbattle and finished forest
+  // saves. Mark that route explicitly instead of weakening the new opening.
+  const originalFields = ['schemaVersion', 'player', 'map', 'time', 'starter', 'party', 'inventory', 'dex', 'quests', 'battle', 'flags', 'coins', 'researchPoints'];
+  const originalSpecies = Object.keys(SPECIES).filter(id => id !== 'creature_cloudfin');
+  if (isObject(state) && state.schemaVersion === SCHEMA_VERSION && !Object.hasOwn(state, 'act1') && keysExactly(state, originalFields)
+      && keysExactly(state.inventory, ['potions', 'bondCrystals']) && keysExactly(state.dex, ['species', 'concepts'])
+      && keysExactly(state.dex.species, originalSpecies) && keysExactly(state.dex.concepts, ['concept_observation', 'concept_sampling_bias'])) {
+    const progress = createAct1();
+    Object.assign(progress, {
+      migrated: true, introComplete: true, started: true, records: [...RECORD_IDS],
+      fieldSteps: { farmCrateMoved: true, riverLocated: true, shopInspected: [...SHOP_INSPECTIONS] },
+      compared: [...RECORD_IDS], comparisonComplete: true, dexReceived: true, demos: [...STARTERS],
+      councilComplete: state.flags?.rivalDefeated === true,
+    });
+    state.act1 = progress;
+    state.inventory = { ...state.inventory, antidotes: 0, archiveFragments: 0 };
+    state.dex.species.creature_cloudfin = { seen: false, recruited: false, scans: 0, observations: [] };
+    state.dex.concepts.concept_historical_observation = 'understood';
+  }
+  const earlyAct1Fields=['migrated','introComplete','started','records','fieldSteps','compared','comparisonComplete','dexReceived','demos','councilComplete','tutorial','side'];
+  if (isObject(state)&&state.schemaVersion===SCHEMA_VERSION&&keysExactly(state.act1,earlyAct1Fields)) state.act1.combatDifficulty='standard';
   validateGame(state);
   return state;
 }
